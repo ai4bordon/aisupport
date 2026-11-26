@@ -259,9 +259,10 @@ export async function* parseFeed(stream: Readable): AsyncGenerator<ParsedRecord>
     }
 
     const fieldMatch = /^<([A-Za-z_][\w]*)\s*>([\s\S]*)<\/\1>$/.exec(line);
-    if (fieldMatch) {
-      const tag = fieldMatch[1];
-      const value = decodeXml(fieldMatch[2] ?? "");
+    const tag = fieldMatch?.[1];
+    const rawValue = fieldMatch?.[2];
+    if (tag !== undefined && rawValue !== undefined) {
+      const value = decodeXml(rawValue);
       if (tag === "group_id" && draft.groupId === null) draft.groupId = value === "" ? null : value;
       if (!draft.fields.has(tag)) draft.fields.set(tag, value);
     }

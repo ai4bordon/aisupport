@@ -23,7 +23,7 @@ export function databaseConfig(): pg.ClientConfig {
   };
 }
 
-export async function withClient<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+export async function withClient<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   const client = new pg.Client(databaseConfig());
   await client.connect();
   try {
