@@ -1,0 +1,105 @@
+/* Страница доступа к стенду — фирменный стиль Softline (R26, ADR-0012).
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.sl-access {
+  --sl-access-logo-height: 53px;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sl-space-5) var(--sl-space-4);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+.sl-access__card {
+  width: 100%;
+  max-width: 480px;
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  padding: var(--sl-space-5);
+}
+
+.sl-access__brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Охранное поле не меньше высоты логотипа — правило брендбука. */
+  padding: max(var(--sl-logo-guard), var(--sl-access-logo-height));
+}
+
+.sl-access__logo {
+  display: block;
+  height: var(--sl-access-logo-height);
+  width: auto;
+  max-width: 100%;
+}
+
+.sl-access__title {
+  margin: var(--sl-space-4) 0 var(--sl-space-2);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sl-text);
+}
+
+.sl-access__lead {
+  margin: 0 0 var(--sl-space-4);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-access__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-2);
+}
+
+.sl-access__label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sl-text-secondary);
+}
+
+.sl-access__input {
+  width: 100%;
+  padding: var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 16px;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-access__input:focus {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 1px;
+}
+
+.sl-access__button {
+  margin-top: var(--sl-space-2);
+  padding: var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sl-surface);
+  background: var(--sl-accent);
+  border: none;
+  border-radius: var(--sl-radius);
+  cursor: pointer;
+}
+
+.sl-access__button:hover {
+  background: var(--sl-accent-hover);
+}
+
+.sl-access__note {
+  margin: var(--sl-space-4) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-muted);
+}
