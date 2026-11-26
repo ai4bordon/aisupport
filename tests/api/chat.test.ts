@@ -55,7 +55,8 @@ function embeddingFor(words: string[]): number[] {
       hash ^= stem.charCodeAt(index);
       hash = Math.imul(hash, 16777619);
     }
-    vector[Math.abs(hash) % 1536] += 1;
+    const index = Math.abs(hash) % 1536;
+    vector[index] = (vector[index] ?? 0) + 1;
   }
   return vector;
 }

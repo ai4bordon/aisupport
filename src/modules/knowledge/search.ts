@@ -100,7 +100,8 @@ export const deterministicEmbeddingProvider: EmbeddingProvider = {
     for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
       if (raw.length < 3) continue;
       if (STOPWORDS.has(raw)) continue;
-      vector[hashStem(stem(raw)) % EMBEDDING_DIMENSIONS] += 1;
+      const index = hashStem(stem(raw)) % EMBEDDING_DIMENSIONS;
+      vector[index] = (vector[index] ?? 0) + 1;
     }
     return vector;
   },

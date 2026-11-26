@@ -25,7 +25,8 @@ function embeddingFor(words: string[]): number[] {
       hash ^= stem.charCodeAt(index);
       hash = Math.imul(hash, 16777619);
     }
-    vector[Math.abs(hash) % EMBEDDING_DIMENSIONS] += 1;
+    const index = Math.abs(hash) % EMBEDDING_DIMENSIONS;
+    vector[index] = (vector[index] ?? 0) + 1;
   }
   return vector;
 }

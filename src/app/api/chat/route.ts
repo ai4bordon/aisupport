@@ -57,7 +57,7 @@ export async function POST(request: Request): Promise<Response> {
   const body = parsed.data;
 
   // Диалог определяется подписанной cookie; тело только сверяется с ней.
-  const cookieConversation = readConversationId(request.headers.get("cookie"));
+  const cookieConversation = readConversationId(request.headers.get("cookie") ?? undefined);
   if (cookieConversation && cookieConversation.id !== body.conversation_id) {
     return errorResponse(
       403,
