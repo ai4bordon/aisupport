@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Пайплайн разработки: дом, три роли, три фазы, пять гейтов</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23131c26'/%3E%3Ccircle cx='9' cy='9' r='4' fill='%23e5a545'/%3E%3Ccircle cx='23' cy='9' r='4' fill='%2363b3f0'/%3E%3Ccircle cx='16' cy='24' r='4' fill='%236fd08c'/%3E%3Cpath d='M9 13v4h14v-4M16 20v0' stroke='%239aa4b5' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("pe-theme");
+    var dark = t ? t === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    if (dark) document.documentElement.classList.add("dark");
+    else document.documentElement.classList.add("light");
+  } catch (e) { /* приватный режим: остаёмся на схеме по умолчанию */ }
+})();
+</script>
+<style>
+  :root {
+    --bg: #eaeef3; --surface: #f7f9fc; --surface2: #ffffff;
+    --border: #c3ccd8; --text: #14202c; --dim: #5c6a7a;
+    --matt: #a96a12; --sp: #1d6fb8; --sup: #2f7d4f; --house: #177f8a; --danger: #b3372f;
+    --code-bg: #e3e9f0;
+  }
+  html.dark {
+    --bg: #0d141b; --surface: #131c26; --surface2: #182431;
+    --border: #26323f; --text: #e6edf5; --dim: #8fa0b3;
+    --matt: #e5a545; --sp: #63b3f0; --sup: #6fd08c; --house: #4fc3d4; --danger: #e06c60;
+    --code-bg: #1e2a38;
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not(.light) {
+      --bg: #0d141b; --surface: #131c26; --surface2: #182431;
+      --border: #26323f; --text: #e6edf5; --dim: #8fa0b3;
+      --matt: #e5a545; --sp: #63b3f0; --sup: #6fd08c; --house: #4fc3d4; --danger: #e06c60;
+      --code-bg: #1e2a38;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 17px; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: Bahnschrift, "Segoe UI", Tahoma, sans-serif;
+    font-size: 1rem; line-height: 1.55;
+    padding: 1.4rem 1.2rem 3.5rem;
+  }
+  .wrap { max-width: 74rem; margin: 0 auto; }
+  main { display: flex; flex-direction: column; gap: 1.7rem; }
+
+  header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.6rem; line-height: 1.2; text-wrap: balance; }
+  .sub { color: var(--dim); font-size: 0.82rem; margin-top: 0.35rem; }
+  .sub code { background: var(--code-bg); border-radius: 0.25rem; padding: 0.05rem 0.35rem; font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.78rem; color: var(--text); }
+
+  button.theme {
+    font: inherit; font-size: 0.78rem; color: var(--text); background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 0.4rem; padding: 0.4rem 0.7rem; cursor: pointer;
+    white-space: nowrap;
+  }
+  button.theme:hover { border-color: var(--sp); }
+  button.theme:focus-visible { outline: 2px solid var(--sp); outline-offset: 2px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 0.9rem; margin: 0.9rem 0 0; }
+  .legend span { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--dim); font-size: 0.78rem; }
+  .dot { width: 0.65rem; height: 0.65rem; border-radius: 0.2rem; display: inline-block; }
+  .d-matt { background: var(--matt); } .d-sp { background: var(--sp); }
+  .d-sup { background: var(--sup); } .d-house { background: var(--house); }
+  .d-danger { background: var(--danger); }
+
+  h2 { font-size: 1.15rem; border-left: 0.22rem solid var(--border); padding-left: 0.6rem; }
+
+  /* ---- Карточки ролей ---- */
+  .actors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9rem; }
+  .actor { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.85rem 1rem; min-width: 0; }
+  .actor h3 { font-size: 0.95rem; margin-bottom: 0.2rem; }
+  .actor .who { font-size: 0.76rem; color: var(--dim); margin-bottom: 0.6rem; overflow-wrap: break-word; }
+  .actor ul { list-style: none; display: flex; flex-direction: column; gap: 0.3rem; }
+  .actor li { font-size: 0.82rem; padding-left: 1rem; position: relative; color: var(--text); overflow-wrap: break-word; }
+  .actor li::before { content: "•"; position: absolute; left: 0.25rem; color: var(--dim); }
+  .a-spec { border-top: 3px solid var(--matt); }
+  .a-exec { border-top: 3px solid var(--sp); }
+  .a-sup  { border-top: 3px solid var(--sup); }
+  .tag { display: inline-block; font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.05rem 0.45rem; border-radius: 1rem; border: 1px solid var(--border); color: var(--dim); margin-left: 0.4rem; vertical-align: 0.1rem; }
+
+  /* ---- Дом ---- */
+  .house { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--house); border-radius: 0.55rem; padding: 0.9rem 1.1rem; }
+  .house h3 { color: var(--house); font-size: 0.95rem; margin-bottom: 0.5rem; }
+  .house table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  .house td { padding: 0.25rem 0.7rem 0.25rem 0; vertical-align: top; overflow-wrap: break-word; }
+  .house td:first-child { color: var(--house); white-space: nowrap; font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.78rem; }
+
+  /* ---- Диаграмма ---- */
+  figure { margin: 0; }
+  figure > figcaption { font-size: 0.76rem; color: var(--dim); margin-top: 0.45rem; }
+  .diagram-shell { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.6rem; overflow-x: auto; }
+  .diagram-shell svg { display: block; width: 100%; height: auto; min-width: 52rem; }
+  svg .box { fill: var(--surface2); stroke: var(--border); stroke-width: 1.5; }
+  svg .box.t-matt { stroke: var(--matt); }
+  svg .box.t-sp { stroke: var(--sp); }
+  svg .box.t-sup { stroke: var(--sup); }
+  svg .box.house-band { fill: var(--surface); stroke: var(--house); }
+  svg .ttl { fill: var(--text); font-size: 14px; font-weight: 600; }
+  svg .sub2 { fill: var(--dim); font-size: 11.5px; }
+  svg .mono2 { fill: var(--dim); font-size: 11px; font-family: "Cascadia Mono", Consolas, monospace; }
+  svg .cap { fill: var(--dim); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+  svg .wire { stroke: var(--dim); stroke-width: 1.6; fill: none; }
+  svg .wire-sup { stroke: var(--sup); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .flow { stroke: var(--sp); stroke-width: 2; fill: none; stroke-dasharray: 7 6; animation: dashmove 2.8s linear infinite; }
+  svg .flow-sup { stroke: var(--sup); stroke-width: 1.8; fill: none; stroke-dasharray: 6 6; animation: dashmove 3.4s linear infinite reverse; }
+  svg .gate { fill: var(--danger); }
+  svg .gate-lbl { fill: var(--danger); font-size: 10.5px; letter-spacing: 0.04em; }
+  svg a.node { cursor: pointer; }
+  svg a.node:focus-visible .box { stroke-width: 3.4; }
+  svg a.node:hover .box { stroke-width: 2.6; }
+  @keyframes dashmove { to { stroke-dashoffset: -64; } }
+  @media (prefers-reduced-motion: reduce) { svg .flow, svg .flow-sup { animation: none; } }
+
+  /* ---- Этапы ---- */
+  .stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8rem; }
+  .stage { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.8rem 0.9rem; min-width: 0; scroll-margin-top: 1rem; }
+  .stage:target { border-color: var(--sp); box-shadow: 0 0 0 2px var(--sp) inset; }
+  .stage .num { font-size: 0.68rem; letter-spacing: 0.08em; color: var(--dim); text-transform: uppercase; }
+  .stage h3 { font-size: 0.95rem; margin: 0.15rem 0 0.45rem; }
+  .stage .owner { font-size: 0.72rem; padding: 0.08rem 0.5rem; border-radius: 1rem; display: inline-block; margin-bottom: 0.55rem; font-weight: 600; }
+  .o-spec { color: var(--matt); border: 1px solid var(--matt); }
+  .o-exec { color: var(--sp); border: 1px solid var(--sp); }
+  .o-both { color: var(--sup); border: 1px solid var(--sup); }
+  .stage ol { margin-left: 1rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .stage .gate { margin-top: 0.55rem; border: 1px dashed var(--danger); border-radius: 0.35rem; padding: 0.35rem 0.5rem; font-size: 0.76rem; color: var(--text); }
+  .stage .gate b { color: var(--danger); }
+
+  /* ---- Матрица ---- */
+  .table-wrap { overflow-x: auto; }
+  table.files { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.files caption { text-align: left; color: var(--dim); font-size: 0.76rem; padding-bottom: 0.4rem; }
+  table.files th { text-align: left; color: var(--dim); font-weight: 600; padding: 0.35rem 0.6rem 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; }
+  table.files td { padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.files code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.78rem; color: var(--matt); }
+  .rw { color: var(--sup); font-weight: 700; } .ro { color: var(--dim); } .no { color: var(--danger); }
+
+  /* ---- Гейт-карточки ---- */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.85rem 1rem; min-width: 0; }
+  .card h3 { font-size: 0.92rem; margin-bottom: 0.5rem; }
+  .card ul { margin-left: 1rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .card li, .card p { font-size: 0.8rem; overflow-wrap: break-word; }
+  code.cmd { background: var(--code-bg); border-radius: 0.25rem; padding: 0.02rem 0.35rem; font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.76rem; color: var(--text); }
+
+  /* ---- Последовательность ---- */
+  .flow-list { background: var(--surface); border: 1px solid var(--border); border-radius: 0.55rem; padding: 1rem 1.2rem; }
+  .flow-list ol { margin-left: 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .flow-list li { font-size: 0.82rem; }
+  .r { font-weight: 700; }
+  .r-spec { color: var(--matt); } .r-exec { color: var(--sp); } .r-sup { color: var(--sup); }
+  .note { color: var(--dim); font-size: 0.76rem; margin-top: 0.7rem; }
+
+  @media (max-width: 60rem) {
+    .actors, .stages, .grid2 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 40rem) {
+    .actors, .stages, .grid2 { grid-template-columns: 1fr; }
+    header.top { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div>
+    <h1>Разработка через дом: от спеки до приёмки</h1>
+    <div class="sub">Профиль <code>dev-pipeline</code>, три раздельные launcher-команды, проверки ролей и журнал целевой фичи <code>.house/work/&lt;task&gt;/pipeline.json</code> и <code>violations.md</code></div>
+    <div class="legend">
+      <span><i class="dot d-matt"></i>spec: домен и спека</span>
+      <span><i class="dot d-sp"></i>exec: код в изоляции</span>
+      <span><i class="dot d-sup"></i>supervisor: приёмка, фронтир, переходы</span>
+      <span><i class="dot d-house"></i>дом: транспорт</span>
+      <span><i class="dot d-danger"></i>проверка по правилам supervisor, машинной блокировки нет</span>
+    </div>
+  </div>
+  <button class="theme" type="button" id="themeBtn" aria-label="Переключить цветовую схему">Тёмная тема</button>
+</header>
+
+<main>
+
+<figure id="fig-map">
+  <div class="diagram-shell" role="img" aria-label="Схема: три роли и три фазы разработки, пять гейтов приёмки Г1, Г2, Г3a, Г3b и Г4, переходы и фронтир ведёт supervisor">
+  <svg viewBox="0 0 1240 620" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="gate"></path>
+      </marker>
+      <marker id="arrDim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--dim)"></path>
+      </marker>
+      <marker id="arrSup" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--sup)"></path>
+      </marker>
+    </defs>
+
+    <!-- роли -->
+    <a class="node" href="#actors" aria-label="Роли: перейти к карточкам">
+      <g>
+        <rect class="box t-matt" x="40" y="24" width="340" height="118" rx="10"></rect>
+        <text class="ttl" x="62" y="54">Окно SPEC · роль spec</text>
+        <text class="sub2" x="62" y="80">скиллы: grill, domain-modeling, to-spec</text>
+        <text class="sub2" x="62" y="102">пишет: GLOSSARY.md, .specs/, adr/, граф</text>
+        <text class="mono2" x="62" y="124">launch-spec</text>
+      </g>
+    </a>
+    <a class="node" href="#actors" aria-label="Роли: перейти к карточкам">
+      <g>
+        <rect class="box t-sp" x="450" y="24" width="340" height="118" rx="10"></rect>
+        <text class="ttl" x="472" y="54">Окно EXEC · роль exec</text>
+        <text class="sub2" x="472" y="80">скиллы: worktrees, plans, subagent+TDD</text>
+        <text class="sub2" x="472" y="102">пишет: код, тесты, docs/superpowers/plans/</text>
+        <text class="mono2" x="472" y="124">launch-exec</text>
+      </g>
+    </a>
+    <a class="node" href="#actors" aria-label="Роли: перейти к карточкам">
+      <g>
+        <rect class="box t-sup" x="860" y="24" width="340" height="118" rx="10"></rect>
+        <text class="ttl" x="882" y="54">Окно SUPERVISOR · supervisor</text>
+        <text class="sub2" x="882" y="80">пять гейтов: Г1, Г2, Г3a, Г3b, Г4</text>
+        <text class="mono2" x="882" y="124">launch-supervisor</text>
+      </g>
+    </a>
+
+    <!-- дом -->
+    <rect class="box house-band" x="40" y="196" width="1160" height="56" rx="10"></rect>
+    <text class="ttl" x="62" y="220" style="fill: var(--house)">КАНАЛ HOUSE: только доставка сообщений</text>
+    <text class="mono2" x="62" y="240">pipeline.json / violations.md: журнал приёмки целевой фичи · ACK = доставка · DONE = сдача</text>
+
+    <!-- связи роли → дом -->
+    <line class="wire" x1="210" y1="142" x2="210" y2="196" marker-end="url(#arrDim)"></line>
+    <line class="flow" x1="620" y1="142" x2="620" y2="196" marker-end="url(#arrDim)"></line>
+    <line class="wire" x1="1030" y1="142" x2="1030" y2="196" marker-end="url(#arrDim)"></line>
+
+    <!-- этапы -->
+    <a class="node" href="#stage-1" aria-label="Фаза 1, гейт Г1: домен и спека">
+      <g>
+        <rect class="box t-matt" x="40" y="330" width="265" height="196" rx="10"></rect>
+        <text class="cap" x="60" y="356">Фаза 1 · Г1</text>
+        <text class="ttl" x="60" y="382">Домен и спека</text>
+        <text class="sub2" x="60" y="408">владелец: SPEC</text>
+        <text class="sub2" x="60" y="436">to-spec: требования и обе копии</text>
+        <text class="sub2" x="60" y="458">трекер + локальная .specs/x.md</text>
+        <text class="sub2" x="60" y="480">копии синхронны до Г1</text>
+        <text class="mono2" x="60" y="506" style="fill: var(--danger)">Г1: спек и решения проверены</text>
+      </g>
+    </a>
+    <a class="node" href="#stage-2" aria-label="Фаза 1, гейт Г2: декомпозиция">
+      <g>
+        <rect class="box t-matt" x="330" y="330" width="265" height="196" rx="10"></rect>
+        <text class="cap" x="350" y="356">Фаза 1 · Г2</text>
+        <text class="ttl" x="350" y="382">Декомпозиция</text>
+        <text class="sub2" x="350" y="408">владелец: SPEC</text>
+        <text class="sub2" x="350" y="436">to-tickets: граф тикетов</text>
+        <text class="sub2" x="350" y="458">блокирующие рёбра</text>
+        <text class="sub2" x="350" y="480">проверка покрытия в обе стороны</text>
+        <text class="mono2" x="350" y="506" style="fill: var(--danger)">Г2: граф и frontier</text>
+      </g>
+    </a>
+    <a class="node" href="#stage-3" aria-label="Фаза 2, гейты Г3a и Г3b: код в изоляции">
+      <g>
+        <rect class="box t-sp" x="620" y="330" width="265" height="196" rx="10"></rect>
+        <text class="cap" x="640" y="356">Фаза 2 · Г3a / Г3b</text>
+        <text class="ttl" x="640" y="382">Код в изоляции</text>
+        <text class="sub2" x="640" y="408">владелец: EXEC</text>
+        <text class="sub2" x="640" y="436">Superpowers: план одного тикета</text>
+        <text class="sub2" x="640" y="458">первый тест падает до кода</text>
+        <text class="sub2" x="640" y="480">diff и свежий прогон на ревью</text>
+        <g data-gate="G3a" role="img" aria-label="Г3a: допуск плана и «поехали» до кода">
+          <path class="gate" d="M630,497 L635,502 L630,507 L625,502 Z"></path>
+        </g>
+        <text class="mono2" x="640" y="506" style="fill: var(--danger)">Г3a план → «поехали»; Г3b после DONE</text>
+      </g>
+    </a>
+    <a class="node" href="#stage-4" aria-label="Фаза 3, гейт Г4: ревью и интеграция">
+      <g>
+        <rect class="box t-sup" x="910" y="330" width="265" height="196" rx="10"></rect>
+        <text class="cap" x="930" y="356">Фаза 3 · Г4</text>
+        <text class="ttl" x="930" y="382">Ревью и интеграция</text>
+        <text class="sub2" x="930" y="408">владелец: SUPERVISOR</text>
+        <text class="sub2" x="930" y="436">requesting-review + finishing</text>
+        <text class="sub2" x="930" y="458">exit code, evidence, критерии</text>
+        <text class="sub2" x="930" y="480">слияние требует согласия владельца</text>
+        <g data-gate="G4" role="img" aria-label="Г4: фича закрыта после ACCEPTED, слияние отдельно">
+          <path class="gate" d="M918,497 L923,502 L918,507 L913,502 Z"></path>
+        </g>
+        <text class="mono2" x="930" y="506" style="fill: var(--danger)">Г4: фича принята, слияние отдельно</text>
+      </g>
+    </a>
+
+    <!-- этапы: цепочка -->
+    <line class="wire" x1="305" y1="428" x2="330" y2="428" marker-end="url(#arrDim)"></line>
+    <line class="wire" x1="595" y1="428" x2="620" y2="428" marker-end="url(#arrDim)"></line>
+    <line class="wire" x1="885" y1="428" x2="910" y2="428" marker-end="url(#arrDim)"></line>
+
+    <!-- гейты между этапами: ромбы на стрелках -->
+    <g data-gate="G1" role="img" aria-label="Г1: приёмка спеки на переходе к декомпозиции">
+      <path class="gate" d="M313,423 L318,428 L313,433 L308,428 Z"></path>
+      <text class="gate-lbl" x="313" y="416" text-anchor="middle">Г1</text>
+    </g>
+    <g data-gate="G2" role="img" aria-label="Г2: приёмка графа и фронтира на переходе к коду">
+      <path class="gate" d="M603,423 L608,428 L603,433 L598,428 Z"></path>
+      <text class="gate-lbl" x="603" y="416" text-anchor="middle">Г2</text>
+    </g>
+    <g data-gate="G3b" role="img" aria-label="Г3b: приёмка сдачи после DONE на переходе к ревью">
+      <path class="gate" d="M896,423 L901,428 L896,433 L891,428 Z"></path>
+      <text class="gate-lbl" x="896" y="416" text-anchor="middle">Г3b</text>
+    </g>
+
+    <!-- супервизор ведёт переходы и фронтир: обход дома по правому краю -->
+    <path class="flow-sup" d="M1195,142 L1218,142 L1218,292 L317,292"></path>
+    <path class="flow-sup" d="M317,292 L317,388" marker-end="url(#arrSup)"></path>
+    <path class="flow-sup" d="M607,292 L607,388" marker-end="url(#arrSup)"></path>
+    <text class="mono2" x="40" y="586">Supervisor ведёт пять гейтов и frontier по правилам роли; машинной блокировки и аудитора нет.</text>
+  </svg>
+  </div>
+  <figcaption>Три фазы разработки, пять гейтов приёмки: Г1, Г2, Г3a, Г3b и Г4. Проверку и фронтир ведёт supervisor.</figcaption>
+</figure>
+
+<section id="actors">
+  <h2>1. Три окна, три роли</h2>
+  <div class="actors" style="margin-top: 0.8rem">
+    <div class="actor a-spec">
+      <h3>Окно SPEC <span class="tag">omp-сессия</span></h3>
+      <div class="who">профиль dev-pipeline, запуск <code class="cmd">launch-spec</code> из корня проекта</div>
+      <ul>
+        <li>прожарка требований, глоссарий, ADR, спеки, граф тикетов</li>
+        <li>скиллы: setup-matt-pocock-skills, triage, grill-with-docs, grill-me, grilling, domain-modeling, codebase-design, to-spec, to-tickets</li>
+        <li>triage: постоянный разбор входящих issue и PR в брифы; разово только настройка меток</li>
+        <li>пишет только артефакты домена: GLOSSARY.md, .specs/, adr/, граф</li>
+        <li>implement-spec не поставлен: он тянет исполнение с tdd и ревью Мэтта</li>
+      </ul>
+    </div>
+    <div class="actor a-exec">
+      <h3>Окно EXEC <span class="tag">omp-сессия</span></h3>
+      <div class="who">профиль dev-pipeline, запуск <code class="cmd">launch-exec</code> из корня проекта</div>
+      <ul>
+        <li>реализация тикетов в worktree, микро-планы, TDD, отладка</li>
+        <li>скиллы: using-superpowers, using-git-worktrees, writing-plans, executing-plans, subagent-driven-development, test-driven-development, systematic-debugging, verification-before-completion, diagnosing-bugs</li>
+        <li>читает домен (RO), пишет только код, тесты, docs/superpowers/plans/</li>
+      </ul>
+    </div>
+    <div class="actor a-sup">
+      <h3>Окно SUPERVISOR <span class="tag">omp-сессия</span></h3>
+      <div class="who">профиль dev-pipeline, запуск <code class="cmd">launch-supervisor</code> из корня проекта</div>
+      <ul>
+        <li>приёмка Г1, Г2, Г3a, Г3b и Г4; журнал решений и evidence ведётся в pipeline.json целевой фичи</li>
+        <li>скиллы: supervisor-pipeline, collaborative-work, gates-first, quality-assurance, requirements-engineering, verification-before-completion, requesting-code-review, finishing-a-development-branch, code-review, improve-codebase-architecture, pr, retro, codebase-design, grilling, domain-modeling, writing-for-agents</li>
+        <li>improve-codebase-architecture и retro вызываются по триггерам после Г3b/Г4, read-only; находки уходят в spec или pipeline.json, не в violations.md</li>
+        <li>сообщения House доставляются от имени отправителя; ACK и DONE не заменяют приёмку</li>
+        <li>фронтир пересчитывается только после принятого тикета и проверки актуальных блокеров</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="house">
+  <h3>HOUSE: только канал доставки, не система приёмки</h3>
+  <p>Каталог <code>.house</code> это транспорт, а <code>work/</code> внутри него это журнал процесса; прежний каталог журнала удалён, искать его не нужно.</p>
+  <table>
+    <tr><td>переписка.md</td><td>канал сообщений и доставки: ACK / DONE не равны ACCEPTED</td></tr>
+    <tr><td>.house/work/&lt;task&gt;/pipeline.json</td><td>журнал гейтов одной фичи: решения, входы, revisions, evidence, замечания и frontier; пишет supervisor</td></tr>
+    <tr><td>.house/work/&lt;task&gt;/violations.md</td><td>журнал нарушений, влияния, ответственных и статуса исправления</td></tr>
+    <tr><td>state.json</td><td>транспортные отметки доставки, к приёмке не относится</td></tr>
+  </table>
+</section>
+<section id="stages">
+  <h2>2. Три фазы разработки и пять гейтов приёмки</h2>
+  <div class="stages" style="margin-top: 0.8rem">
+    <div class="stage" id="stage-1">
+      <div class="num">Фаза 1 · Г1</div>
+      <h3>Домен и спека</h3>
+      <span class="owner o-spec">владелец: SPEC</span>
+      <ol>
+        <li><b>Шаг 0: подготовка каталога</b> — изолировать рабочую область: <code class="cmd">git init</code> в каталоге проекта и копия <code class="cmd">AGENTS.md</code> (правила гейтов и схема pipeline.json). Без изоляции корнем станет родительский репозиторий: worktree и артефакты уедут в него, а супервизор не найдёт правила гейтов</li>
+        <li><code class="cmd">setup-matt-pocock-skills</code>: настройка трекера и меток только при первом подключении</li>
+        <li><code class="cmd">triage</code>: постоянный вход, issue/PR в категорию и бриф</li>
+        <li><code class="cmd">grill-with-docs</code> или <code class="cmd">grill-me</code> (примитив grilling): допрос по развилкам</li>
+        <li><code class="cmd">domain-modeling</code>: GLOSSARY.md, docs/adr/ по настройке setup</li>
+        <li><code class="cmd">codebase-design</code> + <code class="cmd">to-spec</code> → спеку публикуют в трекере и держат синхронную локальную копию .specs/&lt;name&gt;.md</li>
+      </ol>
+      <div class="gate"><b>Г1:</b> трекерная спека и синхронная локальная копия .specs/&lt;name&gt;.md обязательны; пробел или расхождение возвращается роли spec, решение и evidence записываются в pipeline.json</div>
+    </div>
+    <div class="stage" id="stage-2">
+      <div class="num">Фаза 1 · Г2</div>
+      <h3>Декомпозиция</h3>
+      <span class="owner o-spec">владелец: SPEC</span>
+      <ol>
+        <li><code class="cmd">to-tickets</code>: граф тикетов (tracer bullets)</li>
+        <li>блокирующие рёбра: что чему мешает</li>
+        <li>фронтир вручную: тикеты с нулём активных блокеров</li>
+        <li>После каждого решения supervisor записывает входы, фактические ревизии, evidence, замечания, ответственного и следующий шаг в pipeline.json целевой фичи</li>
+      </ol>
+      <div class="gate"><b>Г2:</b> двусторонняя матрица требования → тикет → критерий, проверенные рёбра и фронтир. Пробелы возвращаются spec; решение записывается в pipeline.json.</div>
+    </div>
+    <div class="stage" id="stage-3">
+      <div class="num">Фаза 2 · Г3a</div>
+      <h3>Код в изоляции</h3>
+      <span class="owner o-exec">владелец: EXEC</span>
+      <ol>
+        <li><code class="cmd">using-superpowers</code>: bootstrap без повторного brainstorming</li>
+        <li><code class="cmd">using-git-worktrees</code>: .worktrees/&lt;ticket&gt;/</li>
+        <li><code class="cmd">writing-plans</code>: план Superpowers на один тикет Matt Pocock; supervisor проверяет его до кода. Начало кода отдельно разрешает владелец словами «поехали» для принятой ревизии плана.</li>
+        <li><code class="cmd">subagent-driven-development</code> + <code class="cmd">test-driven-development</code> (или executing-plans); supervisor проверяет diff и evidence каждого DONE</li>
+        <li><code class="cmd">systematic-debugging</code> + <code class="cmd">verification-before-completion</code>, при нужде diagnosing-bugs</li>
+      </ol>
+      <div class="gate"><b>Г3a:</b> план одного тикета принят до кода; начало кода требует отдельного «поехали» владельца для той же ревизии плана.</div>
+    </div>
+    <div class="stage" id="stage-3b">
+      <div class="num">Фаза 2 · Г3b</div>
+      <h3>Проверка сдачи тикета</h3>
+      <span class="owner o-both">проверяет: SUPERVISOR</span>
+      <ol>
+        <li>Exec сдаёт `DONE` со ссылкой на план, diff и свежие результаты проверок.</li>
+        <li>Supervisor сверяет diff, критерии тикета, текущие входы и exit codes.</li>
+        <li>Проверки Spec и Standards выполняются раздельно; замечания адресуются spec или exec.</li>
+        <li>После `ACCEPTED` frontier пересчитывается по актуальному графу зависимостей.</li>
+      </ol>
+      <div class="gate"><b>Г3b:</b> `DONE` означает только сдачу; решение и evidence записываются в pipeline.json.</div>
+    </div>
+    <div class="stage" id="stage-4">
+      <div class="num">Фаза 3 · Г4</div>
+      <h3>Ревью и интеграция</h3>
+      <span class="owner o-both">владелец: SUPERVISOR</span>
+      <ol>
+        <li><code class="cmd">requesting-code-review</code> → <code class="cmd">finishing-a-development-branch</code></li>
+        <li><code class="cmd">code-review</code>: отдельные оси Spec / Standards; supervisor сверяет замечания с diff и критериями</li>
+        <li><code class="cmd">pr</code>: готовит интеграцию после ACCEPTED; merge и закрытие issue только после отдельного разрешения владельца</li>
+        <li><code class="cmd">improve-codebase-architecture</code> (read-only, с <code class="cmd">codebase-design</code>, <code class="cmd">grilling</code>, <code class="cmd">domain-modeling</code>); <code class="cmd">retro</code> (с <code class="cmd">writing-for-agents</code>) по итогам сессии. Находки уходят в <code class="cmd">spec</code>, не в <code class="cmd">violations.md</code></li>
+      </ol>
+      <div class="gate"><b>Г4:</b> каждое требование связано с принятым тикетом и evidence; нет незакрытых замечаний, обе оси ревью проверены. Слияние требует отдельного разрешения владельца.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3. Матрица файлов: кто что пишет (правила ролей)</h2>
+  <div class="flow-list" style="margin: 0.8rem 0">
+    <p><b>Связка форматов Matt Pocock и Superpowers:</b> <code>to-spec</code> публикует спеку в трекер; локальная <code>.specs/&lt;name&gt;.md</code> копия обязательна и синхронизируется с ней до Г1. <code>to-tickets</code> строит связанные задачи; план Superpowers отдельный и относится ровно к одному тикету.</p>
+    <ul style="margin: 0.6rem 0 0 1.2rem; display: flex; flex-direction: column; gap: 0.25rem;">
+      <li><code>.specs/&lt;name&gt;.md</code> и GLOSSARY/ADR: контракт, только чтение для exec.</li>
+      <li>Тикет: один ID, блокирующие рёбра в трекере или .scratch/. ID входит в имя плана, ветки и worktree.</li>
+      <li><code>docs/superpowers/plans/</code>: план Superpowers на один тикет, временный исполнительский формат.</li>
+      <li><code>.superpowers/sdd/</code>: отдельный git-ignored журнал SDD, briefs и отчётов.</li>
+      <li>В шапке плана: <code>Spec:</code> со ссылкой на .specs/&lt;name&gt;.md и <code>Global Constraints</code>, дословно из спеки.</li>
+      <li>Уровень спеки: пользовательское поведение и решения, без конкретных путей к файлам.</li>
+      <li>Уровень плана: точные файлы, интерфейсы и команды проверок для одного тикета.</li>
+      <li><code>to-tickets</code> делит фичу на вертикальные тикеты; план Superpowers делит тикет на микро-шаги.</li>
+    </ul>
+    <p class="note">Исполнитель читает спеку, тикет и план вместе. Трекерная и локальная копии сверяются до Г1; их рассинхронизация блокирует приёмку.</p>
+  </div>
+  <div class="table-wrap">
+  <table class="files">
+    <caption>Одна строка = один путь; R/W разрешён, RO только чтение, «запрет» это правило роли, машинной блокировки пока нет.</caption>
+    <tr><th>Файл / каталог</th><th>SPEC</th><th>EXEC</th><th>SUPERVISOR</th><th>Смысл</th></tr>
+    <tr><td><code>GLOSSARY.md</code></td><td class="rw">R/W</td><td class="ro">RO</td><td class="ro">RO</td><td>словарь домена: имена переменных и функций только отсюда</td></tr>
+    <tr><td><code>.specs/*.md</code></td><td class="rw">R/W</td><td class="ro">RO</td><td class="ro">RO</td><td>спеки Deep Modules: контракт для исполнителя</td></tr>
+    <tr><td><code>ADR по настройке</code></td><td class="rw">R/W</td><td class="ro">RO</td><td class="ro">RO</td><td>путь задаёт docs/agents/domain.md, по умолчанию docs/adr/</td></tr>
+    <tr><td><code>граф тикетов</code></td><td class="rw">R/W</td><td class="ro">RO</td><td class="ro">RO + фронтир</td><td>тикеты и рёбра; supervisor считает фронтир и пишет его в pipeline.json, сам граф не меняет</td></tr>
+    <tr><td><code>.house/work/&lt;task&gt;/pipeline.json</code></td><td class="no">нет записи</td><td class="no">нет записи</td><td class="rw">R/W</td><td>добавляемый журнал решений приёмки одной фичи; старые записи не перезаписывают</td></tr>
+    <tr><td><code>.house/work/&lt;task&gt;/violations.md</code></td><td class="no">нет записи</td><td class="no">нет записи</td><td class="rw">R/W</td><td>нарушения порядка, влияния и ответственные; это не транспорт House</td></tr>
+    <tr><td><code>docs/superpowers/plans/*.md</code></td><td class="no">нет доступа</td><td class="rw">R/W</td><td class="ro">RO</td><td>план на один тикет, в шапке Spec: на .specs/&lt;name&gt;.md</td></tr>
+    <tr><td><code>исходный код + тесты</code></td><td class="no">нет доступа</td><td class="rw">R/W</td><td class="ro">RO</td><td>только в worktree, только TDD</td></tr>
+    <tr><td><code>переписка.md (House)</code></td><td class="rw">свой голос</td><td class="rw">свой голос</td><td class="rw">свой голос</td><td>House доставляет сообщения; ACK и DONE не означают принятие</td></tr>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>4. Что включено сейчас, а что ещё нет</h2>
+  <div class="grid2" style="margin-top: 0.8rem">
+    <div class="card">
+      <h3>Работает уже сейчас</h3>
+      <ul>
+        <li>один профиль dev-pipeline, разрешённые скиллы профиля заданы через includeSkills; каждый launcher отдельно ограничивает навыки роли через --skills</li>
+        <li>глобальные слои выключены; нужные supervisor навыки подключены адресно, случайные пользовательские скиллы не подмешиваются</li>
+        <li>три команды из PATH: launch-spec, launch-exec, launch-supervisor, каждая со своим списком --skills</li>
+        <li>AGENTS.md и supervisor-pipeline задают проверки; pipeline.json целевой фичи хранит решения и evidence, supervisor ведёт его по общей схеме</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Ролевое сужение: статус</h3>
+      <ul>
+        <li>проверен профильный список скиллов launcher-ов; --skills supervisor запускает только явно названный набор</li>
+        <li>includeSkills общий для профиля, а CLI-утилиты omp не проверяют модельный каталог</li>
+        <li>явный skill:// может обойти скрытие, поэтому это остаётся задачей будущего аудитора</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Аудитор и системный гейт ещё не построены</h3>
+      <ul>
+        <li>роль supervisor получает пошаговый скилл supervisor-pipeline плюс code-review и QA навыки</li>
+        <li>каждый переход требует проверяемых доказательств; при пробеле переход отклоняется, исправление адресуется spec или exec</li>
+        <li>это жёсткое требование процесса, а не машинная блокировка инструментов; профильный аудитор не создан</li>
+        <li>совмещение ролей в одном окне допустимо только с записью в violations.md</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Что не подделать и без гейта</h3>
+      <ul>
+        <li>pipeline.json: пишет supervisor, spec/exec туда не лезут по правилам</li>
+        <li>worktree и ветки: git-история показывает, кто и когда писал</li>
+        <li>тесты: зелёный прогон это артефакт, его видно</li>
+        <li>frontier пересчитывается только после ACCEPTED тикета и с учётом актуальных зависимостей</li>
+      </ul>
+      <p class="note">Quality-gates выполняет модель supervisor по скиллу и сохраняет evidence. Машинной блокировки и отдельного аудитора пока нет.</p>
+    </div>
+  </div>
+</section>
+
+<figure id="fig-flow">
+  <h2>5. Живая последовательность (первый тикет от идеи до merge)</h2>
+  <div class="flow-list" style="margin-top: 0.8rem">
+    <ol>
+      <li><span class="r r-sup">SUPERVISOR</span>: Г1 сверяет обязательные копии спеки в трекере и локально. Рассинхрон: CHANGES_REQUESTED роли spec; результат заносится в pipeline.json.</li>
+      <li><span class="r r-spec">SPEC</span>: <code class="cmd">to-tickets</code>: граф с блокирующими рёбрами и критериями приёмки по требованиям.</li>
+      <li><span class="r r-sup">SUPERVISOR</span>: строит матрицу требование → тикет → AC, проверяет покрытие в обе стороны, рёбра и frontier. Только после зелёного Г2 передаёт ID задачи exec.</li>
+      <li><span class="r r-exec">EXEC</span>: готовит worktree и план на один тикет, связанный со спекой. Supervisor проверяет шаги, тесты, область изменений и связь с AC; до кода ждёт своего допуска и явного «поехали» владельца.</li>
+      <li><span class="r r-exec">EXEC</span>: сдаёт тикет сообщением DONE со ссылкой на worktree, план, diff и результатами проверок.</li>
+      <li><span class="r r-sup">SUPERVISOR</span>: Г3b сверяет diff, критерии и свежие команды с exit code. CHANGES_REQUESTED возвращает exec; ACCEPTED требует записанного evidence в pipeline.json.</li>
+      <li><span class="r r-sup">SUPERVISOR</span>: после принятых тикетов выполняет финальный code-review по Spec и Standards. Слияние и закрытие внешних задач только после отдельного разрешения владельца.</li>
+      <li>Периодически на чистом дереве: <code class="cmd">improve-codebase-architecture</code>; по итогам сессии <code class="cmd">retro</code>. Новый виток начинается снова с to-spec.</li>
+    </ol>
+    <p class="note">Гейты обязательны по скиллу supervisor, но машинной блокировки и аудитора нет. House только доставляет: ACK означает получение, DONE означает сдачу, ни одно не означает ACCEPTED. Живой пилот ещё не проведён.</p>
+  </div>
+  <figcaption>Один тикет: кто действует на каждом шаге, где ждут ACCEPTED и где пересчитывается фронтир.</figcaption>
+</figure>
+
+</main>
+</div>
+<script>
+(function () {
+  var btn = document.getElementById("themeBtn");
+  if (!btn) return;
+  function label() {
+    btn.textContent = document.documentElement.classList.contains("dark") ? "Светлая тема" : "Тёмная тема";
+  }
+  label();
+  btn.addEventListener("click", function () {
+    var root = document.documentElement;
+    var dark = root.classList.toggle("dark");
+    root.classList.toggle("light", !dark);
+    try { localStorage.setItem("pe-theme", dark ? "dark" : "light"); } catch (e) {}
+    label();
+  });
+})();
+</script>
+</body>
+</html>
