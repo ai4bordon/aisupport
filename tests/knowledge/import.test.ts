@@ -91,6 +91,14 @@ describe("extractPage", () => {
     expect(extracted.text).not.toContain("var x = 1");
     expect(extracted.text).not.toContain("Служебный текст подвала");
   });
+
+  it("без хлебных крошек берёт путь разделов из адреса", () => {
+    const html = `<!doctype html><html><head><title>Softline ID</title></head><body>
+      <main class="container"><h1>Softline ID</h1><p>Текст раздела.</p></main></body></html>`;
+    const extracted = extractPage(html, "https://docs.softline.com/ru-ru/id/");
+
+    expect(extracted.sectionPath).toBe("id");
+  });
 });
 
 describe("crawlSite", () => {

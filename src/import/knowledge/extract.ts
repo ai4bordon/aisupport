@@ -270,14 +270,39 @@ function breadcrumbItems(container: Node): Node[] {
   return items;
 }
 
-/** Путь разделов из хлебных крошек: «Softline ID / Авторизация». */
-function extractSectionPath(root: Node): string {
+/**
+ * Путь разделов из хлебных крошек: «Softline ID / Авторизация».
+ *
+ * Если крошек на странице нет (корневые разделы сайта), путь берётся из
+ * адреса: значимые сегменты пути после языкового префикса.
+ */
+function extractSectionPath(root: Node, url: string): string {
   const container = findByMarker(root, "breadcrumb");
-  if (!container) return "";
-  const parts = breadcrumbItems(container)
-    .map((item) => textOf(item))
-    .filter((text) => text.length > 0 && !text.startsWith("http"));
-  return parts.join(" / ");
+  if (container) {
+    const parts = breadcrumbItems(container)
+      .map((item) => textOf(item))
+      .filter((text) => text.length > 0 && !text.startsWith("http"));
+    if (parts.length > 0) return parts.join(" / ");
+  }
+  return sectionPathFromUrl(url);
+}
+
+/** Значимые сегменты пути адреса: без языкового префикса. */
+function sectionPathFromUrl(url: string): string {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return "";
+  }
+  const segments = pathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  // Префикс локали вида /ru-ru — служебный, разделом не является.
+  return /^[a-z]{2}-[a-z]{2}$/i.test(segments[0] ?? "")
+    ? segments.slice(1).join(" / ")
+    : segments.join(" / ");
 }
 
 /**
@@ -331,7 +356,7 @@ export function extractPage(html: string, url: string): ExtractedPage {
   return {
     url,
     title: extractTitle(root),
-    sectionPath: extractSectionPath(root),
+    sectionPath: extractSectionPath(root, url),
     text: extractText(root),
   };
 }
