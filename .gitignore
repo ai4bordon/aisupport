@@ -23,6 +23,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Артефакты сборки TypeScript и Next.js
+*.tsbuildinfo
+next-env.d.ts
+
 # Материалы заказчика: фид на 292 МБ и переписки — GitHub их отклонит
 Агент поддержки-*/
 
