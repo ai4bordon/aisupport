@@ -76,12 +76,23 @@ export function paymentTermsText(terms: QuoteInput["paymentTerms"]): string {
 }
 
 /**
- * Номер документа формирует код: дата и счётчик. Номер уникален в пределах
- * тенанта (docs/data-model.md §3.17).
+ * Номер документа формирует код: дата в формате `дд.мм.гггг` и счётчик.
+ * Номер уникален в пределах тенанта (docs/data-model.md §3.17).
  */
 export function buildQuoteNumber(date: string, sequence: number): string {
-  const compact = date.replace(/[^0-9]/g, "").slice(0, 8) || "00000000";
-  return `КП-${compact}-${String(sequence).padStart(3, "0")}`;
+  return `КП-${documentDatePart(date)}-${String(sequence).padStart(3, "0")}`;
+}
+
+/** Дата в формате `дд.мм.гггг` приводится к компактному виду `ггггммдд`. */
+export function documentDatePart(date: string): string {
+  const parts = date.trim().split(/[.\-/]/).filter(Boolean);
+  if (parts.length === 3) {
+    const [day, month, year] = parts as [string, string, string];
+    if (day.length === 2 && month.length === 2 && year.length === 4) {
+      return `${year}${month}${day}`;
+    }
+  }
+  return date.replace(/[^0-9]/g, "").slice(0, 8) || "00000000";
 }
 
 /**

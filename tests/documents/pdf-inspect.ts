@@ -105,16 +105,38 @@ export type PdfFont = { resourceName: string; baseFont: string };
 
 export type PdfImage = { width: number; height: number };
 
+/** Размещение изображения на странице: масштаб по X и Y и позиция. */
+export type PdfImagePlacement = {
+  name: string;
+  scaleX: number;
+  scaleY: number;
+  x: number;
+  y: number;
+};
+
 export type PdfColor = { r: number; g: number; b: number };
+
+/** Текстовый фрагмент с цветом заливки, которым он напечатан. */
+export type PdfTextRun = {
+  resourceName: string;
+  text: string;
+  color: PdfColor | null;
+  x: number;
+  y: number;
+};
 
 export type ParsedPdf = {
   text: string;
   fonts: PdfFont[];
   images: PdfImage[];
+  placements: PdfImagePlacement[];
   colors: PdfColor[];
+  runs: PdfTextRun[];
+  pageWidth: number;
+  pageHeight: number;
 };
 
-type TextRun = { resourceName: string; y: number; codes: string };
+type TextRun = { resourceName: string; y: number; x: number; codes: string };
 
 function collectTextRuns(content: string): TextRun[] {
   const runs: TextRun[] = [];
@@ -123,7 +145,7 @@ function collectTextRuns(content: string): TextRun[] {
   while ((match = block.exec(content)) !== null) {
     const body = match[1] as string;
     const resourceName = /\/(\w+)\s+[\d.]+\s+Tf/.exec(body)?.[1] ?? "";
-    const position = /1 0 0 1 [-\d.]+ ([-\d.]+) Tm/.exec(body);
+    const position = /1 0 0 1 ([-\d.]+) ([-\d.]+) Tm/.exec(body);
     const codes: string[] = [];
     const stringToken = /<([0-9A-Fa-f]+)>|\(((?:\\.|[^\\)])*)\)/g;
     let token: RegExpExecArray | null;
@@ -141,12 +163,106 @@ function collectTextRuns(content: string): TextRun[] {
     if (codes.length > 0) {
       runs.push({
         resourceName,
-        y: position ? Number(position[1]) : Number.NaN,
+        x: position ? Number(position[1]) : Number.NaN,
+        y: position ? Number(position[2]) : Number.NaN,
         codes: codes.join(""),
       });
     }
   }
   return runs;
+}
+
+/**
+ * Разбор содержимого страницы: текстовые фрагменты с цветом заливки и
+ * размещения изображений. Цвет оператора действует до следующего, поэтому
+ * содержимое читается одним проходом.
+ */
+function parseContent(content: string): {
+  runs: Array<TextRun & { color: PdfColor | null }>;
+  placements: PdfImagePlacement[];
+  colors: PdfColor[];
+} {
+  const runs: Array<TextRun & { color: PdfColor | null }> = [];
+  const placements: PdfImagePlacement[] = [];
+  const colors: PdfColor[] = [];
+  let currentColor: PdfColor | null = null;
+
+  const events = [
+    ...[...content.matchAll(/\/Device(RGB|Gray|CMYK)\s+cs/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "cs" as const,
+      value: m[1] as string,
+    })),
+    ...[...content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+scn/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "color" as const,
+      value: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) },
+    })),
+    ...[...content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "color" as const,
+      value: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) },
+    })),
+    ...[...content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+RG/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "stroke" as const,
+      value: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) },
+    })),
+    ...[...content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+scn/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "color" as const,
+      value: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) },
+    })),
+    ...[...content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+SCN/g)].map((m) => ({
+      at: m.index ?? 0,
+      kind: "stroke" as const,
+      value: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) },
+    })),
+    ...[...content.matchAll(/([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+cm\s*\/(\w+)\s+Do/g)].map(
+      (m) => ({
+        at: m.index ?? 0,
+        kind: "image" as const,
+        value: {
+          name: m[7] as string,
+          scaleX: Number(m[1]),
+          scaleY: Number(m[4]),
+          x: Number(m[5]),
+          y: Number(m[6]),
+        },
+      }),
+    ),
+  ].sort((a, b) => a.at - b.at);
+
+  let cursor = 0;
+  for (const event of events) {
+    if (event.kind === "cs") {
+      const block = content.slice(cursor, event.at);
+      for (const run of collectTextRuns(block)) runs.push({ ...run, color: currentColor });
+      cursor = event.at;
+      continue;
+    }
+    if (event.kind === "color") {
+      const block = content.slice(cursor, event.at);
+      for (const run of collectTextRuns(block)) runs.push({ ...run, color: currentColor });
+      cursor = event.at;
+      currentColor = event.value;
+      colors.push(event.value);
+      continue;
+    }
+    if (event.kind === "stroke") {
+      // Цвет контура не влияет на цвет текста, но входит в палитру бланка.
+      const block = content.slice(cursor, event.at);
+      for (const run of collectTextRuns(block)) runs.push({ ...run, color: currentColor });
+      cursor = event.at;
+      colors.push(event.value);
+      continue;
+    }
+    placements.push(event.value);
+  }
+
+  for (const run of collectTextRuns(content.slice(cursor))) runs.push({ ...run, color: currentColor });
+
+  return { runs, placements, colors };
 }
 
 export function parsePdf(raw: Buffer): ParsedPdf {
@@ -201,6 +317,8 @@ export function parsePdf(raw: Buffer): ParsedPdf {
   );
 
   const colors: PdfColor[] = [];
+  const placements: PdfImagePlacement[] = [];
+  const decodedRuns: PdfTextRun[] = [];
   const pieces: string[] = [];
   let lastY: number | null = null;
 
@@ -212,9 +330,13 @@ export function parsePdf(raw: Buffer): ParsedPdf {
     } catch {
       content = object.stream.toString("latin1");
     }
-    if (!/(Tj|TJ)/.test(content)) continue;
+    if (!/(Tj|TJ)/.test(content) && !/\sDo\s/.test(content)) continue;
 
-    for (const run of collectTextRuns(content)) {
+    const parsedContent = parseContent(content);
+    colors.push(...parsedContent.colors);
+    placements.push(...parsedContent.placements);
+
+    for (const run of parsedContent.runs) {
       const fontObject = fontObjectByResource.get(run.resourceName);
       const cmap = fontObject === undefined ? undefined : cmapByFontObject.get(fontObject);
       let decoded = "";
@@ -224,23 +346,35 @@ export function parsePdf(raw: Buffer): ParsedPdf {
         decoded += cmap?.get(code) ?? "";
       }
       if (decoded.length === 0) continue;
+      decodedRuns.push({
+        resourceName: run.resourceName,
+        text: decoded,
+        color: run.color,
+        x: run.x,
+        y: run.y,
+      });
       if (lastY !== null && Number.isFinite(run.y) && Math.abs(run.y - lastY) > 0.5) {
         pieces.push("\n");
       }
       pieces.push(decoded);
       lastY = Number.isFinite(run.y) ? run.y : lastY;
     }
-
-    for (const match of content.matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/g)) {
-      colors.push({
-        r: Number(match[1]),
-        g: Number(match[2]),
-        b: Number(match[3]),
-      });
-    }
   }
 
-  return { text: pieces.join(""), fonts, images, colors };
+  const mediaBox = /\/MediaBox\s*\[\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s*\]/.exec(
+    [...objects.values()].map((object) => object.dict).join("\n"),
+  );
+
+  return {
+    text: pieces.join(""),
+    fonts,
+    images,
+    placements,
+    colors,
+    runs: decodedRuns,
+    pageWidth: mediaBox ? Number(mediaBox[3]) : 0,
+    pageHeight: mediaBox ? Number(mediaBox[4]) : 0,
+  };
 }
 
 export function extractText(raw: Buffer): string {

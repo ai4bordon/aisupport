@@ -222,6 +222,9 @@ function drawTable(context: DrawContext, columns: TableColumn[], rows: TableRow[
     const offset = align === "right" ? width - padding - textWidth : padding;
     doc.x = x + offset;
     doc.y = rowY + (lineHeight - bodyFontSize) / 2;
+    // Заливка ячейки меняет цвет заливки: текст возвращается к чёрному
+    // (R26 — основной текст бланка чёрный).
+    doc.fillColor(bodyTextColor);
     drawRuns(context, text, { bold, align: "left" });
   };
 
@@ -284,14 +287,15 @@ async function drawHeader(context: DrawContext): Promise<void> {
   const logo = await readLogo();
   const logoHeight = (logoWidth * logo.height) / logo.width;
 
-  doc.save().rect(margin, margin, logoWidth, logoHeight).fill("#ffffff").restore();
   doc.image(logo.path, margin, margin, { width: logoWidth, height: logoHeight });
 
   // Охранное поле вокруг логотипа — не меньше его высоты (ADR-0012 §1.7).
   const guard = logoHeight * logoGuardRatio;
   const detailsX = margin + logoWidth + guard;
 
-  doc.fillColor(layout.colors.headerText).fontSize(bodyFontSize + 1);
+  // Основной текст бланка — чёрный (R26): цветом выделены только
+  // графические элементы, не буквы.
+  doc.fillColor(bodyTextColor).fontSize(bodyFontSize + 1);
   doc.x = detailsX;
   doc.y = margin;
   drawRuns(context, companyDetails.legalName, { bold: true });
@@ -339,7 +343,7 @@ function drawFooter(context: DrawContext): void {
     .stroke()
     .restore();
 
-  doc.fillColor(layout.colors.footerText).fontSize(bodyFontSize);
+  doc.fillColor(bodyTextColor).fontSize(bodyFontSize);
   doc.x = margin;
   doc.y = bottom - layout.footer.sloganGap + 6;
   drawRuns(context, corporateSlogan, { align: "center" });

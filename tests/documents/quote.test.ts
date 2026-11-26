@@ -1,12 +1,20 @@
 // @vitest-environment node
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { renderQuote } from "@/modules/documents";
 import type { QuoteInput } from "@/modules/documents";
 import { parsePdf } from "./pdf-inspect";
+
+beforeAll(async () => {
+  // Свой каталог на файл теста: тесты идут параллельно в форках, общий
+  // каталог приводит к гонке за один и тот же PDF.
+  process.env.DOCUMENTS_DIR = await mkdtemp(join(tmpdir(), "aisupport-docs-quote-"));
+});
 
 /**
  * Синтетические входные данные: каталожная позиция и расчёт вымышлены,
