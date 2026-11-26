@@ -25,7 +25,14 @@ export type MaxClient = {
 };
 
 export type MaxClientOptions = {
-  /** Адрес Bot API. По умолчанию — боевой `https://platform-api2.max.ru`. */
+  /**
+   * Адрес Bot API.
+   *
+   * По умолчанию — `https://platform-api.max.ru`. В SDK 1.1.0 зашит
+   * `https://platform-api2.max.ru`, но этот хост не резолвится; рабочий
+   * хост v1 подтверждён проверкой с сервера 27.11 (HTTP 401 без токена —
+   * то есть сервер отвечает).
+   */
   baseUrl?: string;
   /** Своя реализация `fetch` — используется в тестах. */
   fetch?: ClientOptions["fetch"];
@@ -45,7 +52,11 @@ export function redactToken(text: string, token: string): string {
  * Токен передаётся только сюда; наружу он не выходит.
  */
 export function createMaxClient(token: string, options: MaxClientOptions = {}): MaxClient {
-  const clientOptions: ClientOptions = {};
+  const clientOptions: ClientOptions = {
+    // SDK 1.1.0 по умолчанию указывает на platform-api2.max.ru, который не
+    // резолвится. Рабочий хост v1 — platform-api.max.ru.
+    baseUrl: options.baseUrl ?? "https://platform-api.max.ru",
+  };
   if (options.baseUrl) {
     clientOptions.baseUrl = options.baseUrl;
   }

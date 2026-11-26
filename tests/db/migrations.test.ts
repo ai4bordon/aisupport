@@ -125,7 +125,13 @@ describe("миграции среза", () => {
     const result = await testPool().query<{ name: string }>(
       `SELECT name FROM ${SCHEMA}.pgmigrations ORDER BY name`,
     );
-    expect(result.rows.map((row) => row.name)).toEqual([
+    // Проверяются миграции своего диапазона 100–170. После слияния волны
+    // в общей базе применены и миграции соседних срезов, поэтому сравнение
+    // полного списка было бы неверным.
+    const sliceMigrations = result.rows
+      .map((row) => row.name)
+      .filter((name) => /^1[0-7]0_/.test(name));
+    expect(sliceMigrations).toEqual([
       "100_extensions.sql",
       "110_tenants.sql",
       "120_conversations.sql",

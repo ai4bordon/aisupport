@@ -95,8 +95,10 @@ async function ensureSchemaUnlocked(client: pg.Client): Promise<void> {
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const pending = files.filter((name) => !applied.has(name));
 
-  // Таблица `tenants` нужна миграциям каталога как внешний ключ. Пока
-  // миграция ядра не слита, создаём заглушку; после слияния создаст ядро.
+  // Таблица `tenants` создаётся миграцией ядра `110_tenants.sql`. Пока она
+  // не применена, каталогу нужен внешний ключ на неё — создаём совместимую
+  // таблицу-заглушку. Миграция 110 объявлена через CREATE TABLE IF NOT EXISTS,
+  // поэтому после её применения заглушка не мешает.
   const coreWillCreateTenants = pending.some((name) => name.startsWith("110_"));
   if (!coreWillCreateTenants && !(await tableExists(client, "tenants"))) {
     await client.query(`

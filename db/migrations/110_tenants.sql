@@ -1,5 +1,5 @@
 -- Up Migration
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL UNIQUE,
   name text NOT NULL,
