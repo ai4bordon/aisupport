@@ -30,7 +30,17 @@ const DEFAULT_ROOTS = [
   "allsoft",
 ];
 
-const DEFAULT_USER_AGENT =
+/**
+ * User-Agent с указанием контакта.
+ *
+ * У сайтов заказчика разные фильтры: docs.softline.com принимает честного
+ * бота, а store.softline.ru отвечает 403 на ботов без браузерных признаков.
+ * Поэтому у каждого сайта свой User-Agent, и оба называют бота и контакт.
+ */
+const DOCS_USER_AGENT =
+  "SoftlineSupportBot/1.0 (+https://github.com/ai4bordon/aisupport)";
+
+const STORE_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 (+https://github.com/ai4bordon/aisupport)";
 
 type Args = {
@@ -40,6 +50,7 @@ type Args = {
   timeBudgetMs: number;
   cacheDir: string;
   userAgent: string;
+  storeUserAgent: string;
   includeStore: boolean;
   storeUrl: string;
   tenantSlug: string;
@@ -72,7 +83,8 @@ function parseArgs(argv: string[]): Args {
     delayMs: Number.parseInt(values.get("delay-ms") ?? "1000", 10),
     timeBudgetMs: Number.parseInt(values.get("time-budget-ms") ?? "900000", 10),
     cacheDir: values.get("cache-dir") ?? join(process.cwd(), ".cache", "knowledge-site"),
-    userAgent: values.get("user-agent") ?? DEFAULT_USER_AGENT,
+    userAgent: values.get("user-agent") ?? DOCS_USER_AGENT,
+    storeUserAgent: values.get("store-user-agent") ?? STORE_USER_AGENT,
     includeStore: !flags.has("no-store"),
     storeUrl: values.get("store-url") ?? STORE_URL,
     tenantSlug: values.get("tenant") ?? "demo-tenant",
@@ -116,7 +128,7 @@ async function main(): Promise<void> {
       roots: [args.storeUrl],
       maxDepth: 0,
       delayMs: args.delayMs,
-      userAgent: args.userAgent,
+      userAgent: args.storeUserAgent,
       cacheDir: args.cacheDir,
       timeBudgetMs: args.timeBudgetMs,
     });
