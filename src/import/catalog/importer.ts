@@ -43,6 +43,8 @@ export type ImportReport = {
   paramValues: number;
   /** Импорт продолжен с файла состояния. */
   resumed: boolean;
+  /** Пиковое потребление памяти процессом, МБ. */
+  peakMemoryMb: number;
 };
 
 export type ImportOptions = {
@@ -269,6 +271,8 @@ export type InspectReport = {
   sourceKind: SourceKind;
   sourceUrl: string | null;
   durationMs: number;
+  /** Пиковое потребление памяти процессом, МБ. */
+  peakMemoryMb: number;
 };
 
 /**
@@ -336,6 +340,7 @@ export async function inspectFeed(
     sourceKind: feedSource.sourceKind,
     sourceUrl: feedSource.sourceUrl,
     durationMs: Date.now() - startedAt,
+    peakMemoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
   };
 }
 
@@ -513,5 +518,6 @@ export async function importFeed(
     paramNames: paramNames.size,
     paramValues,
     resumed,
+    peakMemoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
   };
 }

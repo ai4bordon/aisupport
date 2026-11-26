@@ -65,6 +65,7 @@ function printReport(report: ImportReport): void {
   console.log(`имён параметров: ${report.paramNames}`);
   console.log(`значений параметров: ${report.paramValues}`);
   console.log(`длительность:  ${report.durationMs} мс`);
+  console.log(`пик памяти:    ${report.peakMemoryMb} МБ`);
 }
 
 function printInspectReport(report: InspectReport): void {
@@ -81,6 +82,7 @@ function printInspectReport(report: InspectReport): void {
   console.log(`имён параметров: ${report.paramNames}`);
   console.log(`значений параметров: ${report.paramValues}`);
   console.log(`длительность:  ${report.durationMs} мс`);
+  console.log(`пик памяти:    ${report.peakMemoryMb} МБ`);
 }
 
 async function main(): Promise<void> {
