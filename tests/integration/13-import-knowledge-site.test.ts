@@ -107,6 +107,27 @@ describe("Импорт базы знаний с сайта заказчика", 
   });
 
   afterAll(async () => {
+    // Фикстура теста не должна оставаться в общей базе среза.
+    await pool?.query(
+      `DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id IN (
+         SELECT id FROM kb_sources WHERE tenant_id = $1 AND source_url LIKE 'http://127.0.0.1:%'
+       )`,
+      [tenantId],
+    );
+    await pool?.query(
+      `DELETE FROM kb_source_snapshots WHERE tenant_id = $1 AND source_id IN (
+         SELECT id FROM kb_sources WHERE tenant_id = $1 AND source_url LIKE 'http://127.0.0.1:%'
+       )`,
+      [tenantId],
+    );
+    await pool?.query(
+      "DELETE FROM kb_sources WHERE tenant_id = $1 AND source_url LIKE 'http://127.0.0.1:%'",
+      [tenantId],
+    );
+    await pool?.query(
+      "DELETE FROM kb_articles WHERE tenant_id = $1 AND owner = 'customer-site' AND id NOT IN (SELECT id FROM kb_sources WHERE tenant_id = $1)",
+      [tenantId],
+    );
     await pool?.end();
     await rm(cacheDir, { recursive: true, force: true });
     await new Promise<void>((resolve) => server?.close(() => resolve()));
