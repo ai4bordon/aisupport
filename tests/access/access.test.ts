@@ -218,10 +218,18 @@ describe("код доступа и подписанная cookie", () => {
     expect(String(metadata.title)).toContain("Софтлайн");
   });
 
-  it("заголовок страницы и favicon оформлены по R26", () => {
+  it("заголовок страницы и favicon оформлены по R26", async () => {
     expect(String(metadata.title)).toContain("Софтлайн Решения");
-    expect(metadata.icons).toBeDefined();
-    expect(metadata.icons?.icon).toBeDefined();
+
+    // Favicon — утверждённый файл логотипа без изменений: побайтово.
+    const icon = await readFile(resolve(process.cwd(), "src/app/access/icon.png"));
+    const approved = await readFile(
+      resolve(
+        process.cwd(),
+        "../../docs/лого софтлайн/Софтлайн-решения+SOFL_Logo_rgb (2).png",
+      ),
+    );
+    expect(icon.equals(approved)).toBe(true);
   });
 
   it("использует web-палитру и стек шрифтов из общих токенов", async () => {

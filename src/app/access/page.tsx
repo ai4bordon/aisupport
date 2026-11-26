@@ -1,13 +1,24 @@
+import type { Metadata } from "next";
 import Image from "next/image";
 import logo from "./softline-logo.png";
 import icon from "./icon.png";
 import "./styles.css";
 
-export const metadata = {
+/**
+ * Путь к статическому изображению.
+ *
+ * В сборке Next импорт даёт объект `StaticImageData` с полем `src`, а в
+ * тестах сборщик отдаёт готовый URL-строку.
+ */
+function assetSrc(asset: string | { src: string }): string {
+  return typeof asset === "string" ? asset : asset.src;
+}
+
+export const metadata: Metadata = {
   title: "Доступ к демонстрационному стенду — Софтлайн Решения",
   description: "Страница ввода кода доступа к демонстрационному стенду ИИ-агента поддержки.",
   // Favicon — утверждённый вариант логотипа «Софтлайн Решения + SOFL» (R26).
-  icons: { icon },
+  icons: { icon: assetSrc(icon) },
 };
 
 export default function AccessPage() {
