@@ -50,6 +50,18 @@ export type AgentOutcome =
       steps: AgentStep[];
     };
 
+/**
+ * Пределы времени (docs/api-contract.md §10).
+ *
+ * - внутренний шаг — 5 с;
+ * - весь диалог — 300 с.
+ *
+ * Предел ожидания первого токена модели (120 с) и пауза перед повтором
+ * после 429 (30 с) заданы в src/core/model.ts.
+ */
+export const STEP_TIMEOUT_MS = 5_000;
+export const DIALOG_TIMEOUT_MS = 300_000;
+
 const SYSTEM_PROMPT = [
   "Ты — агент службы поддержки ПАО «Софтлайн».",
   "Отвечай только по подтверждённым источникам, которые переданы тебе.",
@@ -67,6 +79,84 @@ function nowMs(): number {
 /** Замер длительности узла в миллисекундах. */
 function elapsedSince(startedAt: number): number {
   return Math.max(0, nowMs() - startedAt);
+}
+
+/**
+ * Предел времени для внутреннего шага (5 с) и всего диалога (300 с).
+ *
+ * Истечение любого из пределов — эскалация с причиной `upstream_timeout`,
+ * а не ответ по памяти модели.
+ */
+class TimeoutGuard {
+  readonly deadline: number;
+
+  constructor(private readonly dialogStartedAt: number) {
+    this.deadline = dialogStartedAt + DIALOG_TIMEOUT_MS;
+  }
+
+  /** Остаток времени на шаг с учётом общего предела диалога. */
+  stepBudget(): number {
+    const dialogLeft = this.deadline - nowMs();
+    return Math.max(0, Math.min(STEP_TIMEOUT_MS, dialogLeft));
+  }
+
+  get dialogExpired(): boolean {
+    return nowMs() >= this.deadline;
+  }
+}
+
+/**
+ * Ошибка превышения времени ожидания внутреннего шага.
+ */
+export class StepTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StepTimeoutError";
+  }
+}
+
+/**
+ * Запуск шага с пределом времени.
+ *
+ * Промис задачи не отменяется — он продолжает выполняться, но его результат
+ * уже не используется. Для сетевых вызовов предел держит сам клиент модели.
+ */
+async function withStepTimeout<T>(
+  budgetMs: number,
+  operation: () => Promise<T>,
+  node: string,
+): Promise<T> {
+  if (budgetMs <= 0) {
+    throw new StepTimeoutError(`Предел времени диалога истёк до узла ${node}`);
+  }
+
+  const { promise, resolve, reject } = withResolvers<T>();
+  const timer = setTimeout(() => {
+    reject(new StepTimeoutError(`Узел ${node} превысил предел времени ${budgetMs} мс`));
+  }, budgetMs);
+
+  operation().then(resolve, reject);
+
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** `Promise.withResolvers` требует lib ES2024, а проект зафиксирован на ES2023. */
+function withResolvers<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 /**
@@ -118,6 +208,7 @@ function escalationOutcome(
 export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> {
   const steps: AgentStep[] = [];
   const tenantId = input.tenantId;
+  const guard = new TimeoutGuard(nowMs());
 
   const pushStep = async (
     step: Omit<AgentStep, "conversationId">,
@@ -135,7 +226,11 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
   const classifyStartedAt = nowMs();
   let intent = "";
   try {
-    const classification = await classify(input);
+    const classification = await withStepTimeout(
+      guard.stepBudget(),
+      () => classify(input),
+      "classify",
+    );
     intent = classification.intent;
     await pushStep({
       node: "classify",
@@ -151,7 +246,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     });
   } catch (error) {
     const reason =
-      error instanceof ModelTimeoutError
+      error instanceof ModelTimeoutError || error instanceof StepTimeoutError
         ? "upstream_timeout"
         : "upstream_error";
     await pushStep({
@@ -178,7 +273,11 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
   const retrieveStartedAt = nowMs();
   let sources: Source[] = [];
   try {
-    const results = await search(input.text, tenantId);
+    const results = await withStepTimeout(
+      guard.stepBudget(),
+      () => search(input.text, tenantId),
+      "retrieve",
+    );
     sources = results.map((result) => ({
       kind: result.articleId ? ("kb_article" as const) : ("kb_document" as const),
       id: result.articleId,
@@ -200,7 +299,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     });
   } catch (error) {
     const reason =
-      error instanceof ModelTimeoutError ? "upstream_timeout" : "upstream_error";
+      error instanceof ModelTimeoutError || error instanceof StepTimeoutError
+        ? "upstream_timeout"
+        : "upstream_error";
     await pushStep({
       node: "retrieve",
       endpoint: "GET /kb/search",
@@ -304,21 +405,27 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
 
   try {
     const client = getModelClient();
-    const result = await client.complete({
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: input.text },
-        {
-          role: "assistant",
-          content: `Подтверждённые источники:\n${sources
-            .map(
-              (source, index) =>
-                `[${index + 1}] ${source.title}${source.location ? ` (${source.location})` : ""}\n${source.text}`,
-            )
-            .join("\n\n")}`,
-        },
-      ],
-    });
+    // Шаг генерации ограничен 5 с и общим пределом диалога 300 с.
+    const result = await withStepTimeout(
+      guard.stepBudget(),
+      () =>
+        client.complete({
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: input.text },
+            {
+              role: "assistant",
+              content: `Подтверждённые источники:\n${sources
+                .map(
+                  (source, index) =>
+                    `[${index + 1}] ${source.title}${source.location ? ` (${source.location})` : ""}\n${source.text}`,
+                )
+                .join("\n\n")}`,
+            },
+          ],
+        }),
+      "respond",
+    );
     generatedText = result.text;
     generatedAmounts = result.amounts;
     generatedCitations = result.citations;
@@ -341,7 +448,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     });
   } catch (error) {
     const reason =
-      error instanceof ModelTimeoutError ? "upstream_timeout" : "upstream_error";
+      error instanceof ModelTimeoutError || error instanceof StepTimeoutError
+        ? "upstream_timeout"
+        : "upstream_error";
     await pushStep({
       node: "respond",
       endpoint: "POST /agent/respond",
