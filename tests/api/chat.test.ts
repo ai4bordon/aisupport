@@ -101,9 +101,9 @@ describe("POST /v1/chat", () => {
   it("валидный вопрос даёт 200, outcome=respond, источники и идентификаторы", async () => {
     const response = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "22222222-2222-4222-8222-222222222222",
+          client_message_id: "1a2b3c4d-2222-4222-8222-222222222222",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -119,7 +119,7 @@ describe("POST /v1/chat", () => {
       trace: { steps: number; tokens: number; cost_rub: number };
     };
     expect(body.outcome).toBe("respond");
-    expect(body.conversation_id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.conversation_id).toBe("1a2b3c4d-1111-4111-8111-111111111111");
     expect(body.message_id).toBeTruthy();
     expect(body.answer?.sources.length).toBeGreaterThan(0);
     expect(body.escalation).toBeNull();
@@ -129,9 +129,9 @@ describe("POST /v1/chat", () => {
   it("вопрос без источника даёт escalate с причиной no_confirmed_source", async () => {
     const response = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "33333333-3333-4333-8333-333333333333",
+          client_message_id: "1a2b3c4d-3333-4333-8333-333333333333",
           text: "Как настроить квантовый телепорт?",
         },
       }),
@@ -159,9 +159,9 @@ describe("POST /v1/chat", () => {
 
   it("повтор client_message_id не создаёт второй ответ", async () => {
     const payload = {
-      conversation_id: "11111111-1111-4111-8111-111111111111",
+      conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
       message: {
-        client_message_id: "44444444-4444-4444-8444-444444444444",
+        client_message_id: "1a2b3c4d-4444-4444-8444-444444444444",
         text: "Как получить электронную лицензию?",
       },
     };
@@ -183,9 +183,9 @@ describe("POST /v1/chat", () => {
   it("ПД в ответе восстановлены, а в трассе исходных значений нет", async () => {
     const response = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "55555555-5555-4555-8555-555555555555",
+          client_message_id: "1a2b3c4d-5555-4555-8555-555555555555",
           text: "Иван из ООО «Ромашка» спрашивает про электронную лицензию",
         },
       }),
@@ -205,9 +205,9 @@ describe("POST /v1/chat", () => {
   it("запрос без cookie создаёт новый диалог и выдаёт Set-Cookie", async () => {
     const response = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "66666666-6666-4666-8666-666666666666",
+          client_message_id: "1a2b3c4d-6666-4666-8666-666666666666",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -223,9 +223,9 @@ describe("POST /v1/chat", () => {
   it("подписанная cookie продолжает тот же диалог", async () => {
     const first = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "77777777-7777-4777-8777-777777777777",
+          client_message_id: "1a2b3c4d-7777-4777-8777-777777777777",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -235,9 +235,9 @@ describe("POST /v1/chat", () => {
     const second = await POST(
       chatRequest(
         {
-          conversation_id: "11111111-1111-4111-8111-111111111111",
+          conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
           message: {
-            client_message_id: "88888888-8888-4888-8888-888888888888",
+            client_message_id: "1a2b3c4d-8888-4888-8888-888888888888",
             text: "Как получить электронную лицензию?",
           },
         },
@@ -246,15 +246,15 @@ describe("POST /v1/chat", () => {
     );
     const body = (await second.json()) as { conversation_id: string };
 
-    expect(body.conversation_id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(body.conversation_id).toBe("1a2b3c4d-1111-4111-8111-111111111111");
   });
 
   it("conversation_id, не совпадающий с cookie, даёт 403", async () => {
     const first = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "99999999-9999-4999-8999-999999999999",
+          client_message_id: "1a2b3c4d-9999-4999-8999-999999999999",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -264,9 +264,9 @@ describe("POST /v1/chat", () => {
     const response = await POST(
       chatRequest(
         {
-          conversation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          conversation_id: "1a2b3c4d-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           message: {
-            client_message_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            client_message_id: "1a2b3c4d-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             text: "Как получить электронную лицензию?",
           },
         },
@@ -280,18 +280,18 @@ describe("POST /v1/chat", () => {
   it("два клиента с одинаковым IP получают разные диалоги", async () => {
     const first = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          client_message_id: "1a2b3c4d-cccc-4ccc-8ccc-cccccccccccc",
           text: "Как получить электронную лицензию?",
         },
       }),
     );
     const second = await POST(
       chatRequest({
-        conversation_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        conversation_id: "1a2b3c4d-dddd-4ddd-8ddd-dddddddddddd",
         message: {
-          client_message_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          client_message_id: "1a2b3c4d-eeee-4eee-8eee-eeeeeeeeeeee",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -306,9 +306,9 @@ describe("POST /v1/chat", () => {
     const response = await POST(
       chatRequest(
         {
-          conversation_id: "11111111-1111-4111-8111-111111111111",
+          conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
           message: {
-            client_message_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            client_message_id: "1a2b3c4d-ffff-4fff-8fff-ffffffffffff",
             text: "Как получить электронную лицензию?",
           },
         },
@@ -328,9 +328,9 @@ describe("POST /v1/chat", () => {
 
     const response = await POST(
       chatRequest({
-        conversation_id: "11111111-1111-4111-8111-111111111111",
+        conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "12121212-1212-4212-8212-121212121212",
+          client_message_id: "1a2b3c4d-1212-4212-8212-121212121212",
           text: "Как получить электронную лицензию?",
         },
       }),

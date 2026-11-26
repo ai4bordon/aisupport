@@ -166,7 +166,15 @@ export async function POST(request: Request): Promise<Response> {
   const maskScope = await loadMaskScope(pool, tenantId, conversationId);
   const masked = maskPersonalData(body.message.text, { mapping: maskScope.mapping });
 
-  await ensureConversation(pool, tenantId, conversationId);
+  const claimed = await claimConversation(pool, tenantId, conversationId);
+  if (!claimed) {
+    return errorResponse(
+      403,
+      "forbidden",
+      "Диалог принадлежит другому арендатору",
+      requestId,
+    );
+  }
 
   await pool.query(
     `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
@@ -339,18 +347,33 @@ async function loadMaskScope(
   return { mapping };
 }
 
-/** Создание диалога, если его ещё нет. */
-async function ensureConversation(
+/**
+ * Создание диалога, если его ещё нет.
+ *
+ * Идентификатор диалога приходит из тела запроса, поэтому перед
+ * использованием проверяется принадлежность арендатору: чужой диалог
+ * использовать нельзя (docs/data-model.md §5, R15). Возвращается `false`,
+ * если диалог принадлежит другому арендатору.
+ */
+async function claimConversation(
   pool: Pool,
   tenantId: string,
   conversationId: string,
-): Promise<void> {
+): Promise<boolean> {
+  const existing = await pool.query<{ tenant_id: string }>(
+    "SELECT tenant_id FROM conversations WHERE id = $1",
+    [conversationId],
+  );
+  const found = existing.rows[0];
+  if (found) return found.tenant_id === tenantId;
+
   await pool.query(
     `INSERT INTO conversations (id, tenant_id, channel, status)
      VALUES ($1, $2, 'web', 'open')
      ON CONFLICT (id) DO NOTHING`,
     [conversationId, tenantId],
   );
+  return true;
 }
 
 /** Запись эскалации в очередь менеджера. */
