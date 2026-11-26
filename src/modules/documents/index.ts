@@ -7,6 +7,7 @@
 
 export { renderQuote } from "./quote";
 export { renderInvoice } from "./invoice";
+export { DocumentError } from "./render";
 
 export type {
   DocumentErrorCode,
