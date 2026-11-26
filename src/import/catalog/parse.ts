@@ -271,7 +271,9 @@ export async function* parseFeed(stream: Readable): AsyncGenerator<ParsedRecord>
   if (trailing) yield { kind: "offer", offer: trailing };
 }
 
-/** Дата фида из первой строки файла — дешёвый способ узнать её без полного разбора. */
+/**
+ * Дата фида из первой строки файла — дешёвый способ узнать её без полного разбора.
+ */
 export async function readFeedDate(path: string): Promise<string | null> {
   const reader = createInterface({
     input: createReadStream(path, { encoding: "utf8" }),
@@ -283,4 +285,20 @@ export async function readFeedDate(path: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+/**
+ * Дата фида в ISO UTC. В фиде дата записана без часового пояса («2026-11-25 14:12»),
+ * и по договорённости она трактуется как UTC: так провенанс одинаков в любом
+ * часовом поясе машины, где запущен импорт.
+ */
+export function feedDateToIsoUtc(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const withZone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    ? trimmed.replace(" ", "T")
+    : `${trimmed.replace(" ", "T")}Z`;
+  const parsed = new Date(withZone);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

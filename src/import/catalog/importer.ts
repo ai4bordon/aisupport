@@ -7,7 +7,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { PoolClient } from "pg";
-import { parseFeed, type ParsedCategory, type ParsedOffer } from "./parse";
+import { parseFeed, feedDateToIsoUtc, type ParsedCategory, type ParsedOffer } from "./parse";
 import { openFeedSource, type FeedSource, type SourceKind } from "./source";
 import { getPool } from "@/modules/catalog/pool";
 
@@ -331,7 +331,7 @@ export async function importFeed(
 
     for await (const record of parseFeed(feedSource.stream)) {
       if (record.kind === "meta") {
-        feedDate = record.feedDate;
+        feedDate = feedDateToIsoUtc(record.feedDate);
         snapshotId = await ensureSnapshot(client, tenantId, feedSource, feedDate);
         continue;
       }
