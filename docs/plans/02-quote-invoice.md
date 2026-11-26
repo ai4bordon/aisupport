@@ -107,7 +107,7 @@ type DocumentError = {
   Команда: `npm run test -- tests/documents/quote.test.ts`
   Ожидание: ПРОВЕДЕНО.
 
-- [ ] **Шаг 7: Зафиксировать изменения**
+- [ ] **Шаг 8: Зафиксировать изменения**
 
 ```bash
 git add src/modules/documents tests/documents/quote.test.ts
@@ -148,12 +148,17 @@ git commit -m "feat: render quote draft from customer template"
 
   Тело — `QuoteInput` по контракту §0.3. Ответ `200` с `RenderedDocument`. При `document_field_missing` — `422 approval_required` с указанием поля; при `amount_mismatch` — `422` с кодом `amount_mismatch`.
 
-- [ ] **Шаг 6: Запустить тесты и убедиться в прохождении**
+- [ ] **Шаг 6: Проверить оформление по корпоративному бланку**
+
+  Проверить, что PDF собран на бланке: логотип «Софтлайн Решения + SOFL» из `docs/лого софтлайн/` в шапке без искажений, охранное поле не меньше его высоты, подтверждённые реквизиты ПАО «Софтлайн», слоган «Мы знаем. Мы можем.» в подвале, Montserrat со стеком `Montserrat, "Segoe UI", system-ui, sans-serif`, основной текст чёрный, печатная палитра `#A20C33` / `#A6A8AB` / `#2396D3` / `#686968`.
+  Ожидание: в PDF присутствуют логотип, реквизиты, слоган и верная типографика; незаполненных плейсхолдеров нет; выдуманных контактов нет.
+
+- [ ] **Шаг 7: Запустить тесты и убедиться в прохождении**
 
   Команда: `npm run test -- tests/documents/quote.test.ts tests/documents/invoice.test.ts`
   Ожидание: ПРОВЕДЕНО.
 
-- [ ] **Шаг 7: Зафиксировать изменения**
+- [ ] **Шаг 8: Зафиксировать изменения**
 
 ```bash
 git add src/modules/documents src/app/api/docs db/migrations/3000_templates_documents.sql tests/documents/invoice.test.ts
