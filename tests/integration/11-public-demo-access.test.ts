@@ -88,18 +88,58 @@ describe("11 — защита публичного демонстрационн�
     expect(decision.reason).toBe("ok");
   });
 
-  it("не тратит квоту на запросы без кода доступа", async () => {
+  it("не тратит квоту диалогов на запросы без кода доступа", async () => {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await checkAccess({ ip: "203.0.113.32" });
     }
 
-    const response = await postCode(TEST_CODE);
-    const cookieHeader = `${COOKIE_NAME}=${cookieValue(
-      response.headers.get("set-cookie") as string,
-    )}`;
+    // Лимит диалогов не тронут: запросы без кода диалог не создают.
+    const dialog = await checkDailyDialogs();
+    expect(dialog.allowed).toBe(true);
+  });
 
-    const decision = await checkAccess({ ip: "203.0.113.32", cookieHeader });
-    expect(decision.allowed).toBe(true);
+  it("не расходует квоту диалогов на каждый запрос", async () => {
+    const previous = process.env.REQUESTS_PER_MINUTE;
+    process.env.REQUESTS_PER_MINUTE = "1000";
+
+    try {
+      const response = await postCode(TEST_CODE);
+      const cookieHeader = `${COOKIE_NAME}=${cookieValue(
+        response.headers.get("set-cookie") as string,
+      )}`;
+
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const decision = await checkAccess({ ip: "203.0.113.40", cookieHeader });
+        expect(decision.allowed).toBe(true);
+      }
+
+      // Квота диалогов не тронута: 60 запросов — это не 60 диалогов.
+      const dialog = await checkDailyDialogs();
+      expect(dialog.allowed).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.REQUESTS_PER_MINUTE;
+      } else {
+        process.env.REQUESTS_PER_MINUTE = previous;
+      }
+    }
+  });
+
+  it("считает неавторизованные запросы в лимите запросов по IP", async () => {
+    const decisions: boolean[] = [];
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      const decision = await checkAccess({ ip: "203.0.113.41" });
+      decisions.push(decision.allowed);
+    }
+
+    // Первые десять отклонены по коду, одиннадцатый — по лимиту запросов.
+    expect(decisions.slice(0, 10).every((allowed) => !allowed)).toBe(true);
+    expect(decisions[10]).toBe(false);
+
+    const limited = await checkAccess({ ip: "203.0.113.41" });
+    expect(limited.allowed).toBe(false);
+    expect(limited.reason).toBe("rate_limited");
+    expect(limited.retryAfterSeconds).toBeGreaterThan(0);
   });
 
   it("отзывает cookie после смены кода", async () => {

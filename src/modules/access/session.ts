@@ -9,6 +9,9 @@ export type AccessSession = {
 /** Имя cookie доступа — заморожено контрактом `docs/api-contract.md` §11.1. */
 export const ACCESS_COOKIE_NAME = "support_access";
 
+/** Имя cookie кабинета менеджера — отдельный барьер с отдельным кодом. */
+export const MANAGER_COOKIE_NAME = "support_manager";
+
 /** Время жизни сессии по умолчанию; владелец может задать его через окружение. */
 export const DEFAULT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 
@@ -44,6 +47,11 @@ export function constantTimeEquals(left: string, right: string): boolean {
 
 export function currentAccessCode(): string | null {
   const code = process.env.ACCESS_CODE;
+  return code && code.length > 0 ? code : null;
+}
+
+export function currentManagerCode(): string | null {
+  const code = process.env.MANAGER_CODE;
   return code && code.length > 0 ? code : null;
 }
 
@@ -97,14 +105,24 @@ export function readCookieValue(cookieHeader: string | undefined | null, name: s
   return null;
 }
 
-export function readAccessSession(cookieHeader: string | undefined | null): AccessSession | null {
-  const code = currentAccessCode();
+/**
+ * Разбор подписанной cookie сессии.
+ *
+ * Возвращает сессию, только если подпись сошлась, срок не истёк, а код,
+ * которым выдана cookie, совпадает с текущим кодом в окружении: смена кода
+ * отзывает ранее выданные cookie.
+ */
+function readSessionForCode(
+  cookieHeader: string | undefined | null,
+  cookieName: string,
+  code: string | null,
+): AccessSession | null {
   const secret = currentSessionSecret();
   if (!code || !secret) {
     return null;
   }
 
-  const raw = readCookieValue(cookieHeader, ACCESS_COOKIE_NAME);
+  const raw = readCookieValue(cookieHeader, cookieName);
   if (!raw) {
     return null;
   }
@@ -141,8 +159,38 @@ export function readAccessSession(cookieHeader: string | undefined | null): Acce
   return { sessionId, codeDigest, expiresAt };
 }
 
+export function readAccessSession(cookieHeader: string | undefined | null): AccessSession | null {
+  return readSessionForCode(cookieHeader, ACCESS_COOKIE_NAME, currentAccessCode());
+}
+
+export function readManagerSession(cookieHeader: string | undefined | null): AccessSession | null {
+  return readSessionForCode(cookieHeader, MANAGER_COOKIE_NAME, currentManagerCode());
+}
+
+/**
+ * Проверка кода доступа стенда.
+ *
+ * Код читается только из `ACCESS_CODE`; сравнение — constant-time. Код и его
+ * отпечаток не возвращаются и не попадают в cookie.
+ */
 export async function verifyAccessCode(code: string): Promise<AccessSession | null> {
-  const expected = currentAccessCode();
+  return verifyCodeAgainst(currentAccessCode(), code);
+}
+
+/**
+ * Проверка кода менеджера.
+ *
+ * Кабинет менеджера защищён дополнительным отдельным кодом (R17): код стенда
+ * в кабинет не пускает.
+ */
+export async function verifyManagerCode(code: string): Promise<AccessSession | null> {
+  return verifyCodeAgainst(currentManagerCode(), code);
+}
+
+async function verifyCodeAgainst(
+  expected: string | null,
+  code: string,
+): Promise<AccessSession | null> {
   const secret = currentSessionSecret();
   if (!expected || !secret || typeof code !== "string" || code.length === 0) {
     return null;
@@ -158,10 +206,18 @@ export async function verifyAccessCode(code: string): Promise<AccessSession | nu
 }
 
 export function buildAccessCookie(session: AccessSession): string {
+  return buildCookie(ACCESS_COOKIE_NAME, session);
+}
+
+export function buildManagerCookie(session: AccessSession): string {
+  return buildCookie(MANAGER_COOKIE_NAME, session);
+}
+
+function buildCookie(name: string, session: AccessSession): string {
   const value = signAccessSession(session);
   const maxAge = Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000));
   return [
-    `${ACCESS_COOKIE_NAME}=${value}`,
+    `${name}=${value}`,
     "Path=/",
     "HttpOnly",
     "Secure",

@@ -6,11 +6,20 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AccessPage, { metadata } from "@/app/access/page";
 import { POST } from "@/app/api/access/route";
-import { readAccessSession, signAccessSession, verifyAccessCode } from "@/modules/access";
+import {
+  checkManagerAccess,
+  readAccessSession,
+  readManagerSession,
+  signAccessSession,
+  verifyAccessCode,
+  verifyManagerCode,
+  type AccessSession,
+} from "@/modules/access";
 
 const TEST_CODE = "demo-test-code-11";
 const TEST_SECRET = "demo-test-session-secret-11";
 const COOKIE_NAME = "support_access";
+const MANAGER_COOKIE_NAME = "support_manager";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -147,6 +156,42 @@ describe("код доступа и подписанная cookie", () => {
     const value = signAccessSession({ ...(issued as NonNullable<typeof issued>), expiresAt: Date.now() - 1000 });
 
     expect(readAccessSession(`${COOKIE_NAME}=${value}`)).toBeNull();
+  });
+
+  it("не пускает в кабинет менеджера без кода менеджера", async () => {
+    process.env.MANAGER_CODE = "manager-code-11";
+
+    expect(await verifyManagerCode("not-the-manager-code")).toBeNull();
+
+    const session = await verifyManagerCode("manager-code-11");
+    expect(session).not.toBeNull();
+
+    const managerCookie = `${MANAGER_COOKIE_NAME}=${signAccessSession(
+      session as AccessSession,
+    )}`;
+    expect(readManagerSession(managerCookie)).not.toBeNull();
+
+    const standSession = await verifyAccessCode(TEST_CODE);
+    expect(
+      readManagerSession(`${COOKIE_NAME}=${signAccessSession(standSession as AccessSession)}`),
+    ).toBeNull();
+
+    const decision = await checkManagerAccess({ cookieHeader: managerCookie });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("отзывает код менеджера при его смене", async () => {
+    process.env.MANAGER_CODE = "manager-code-11";
+    const session = await verifyManagerCode("manager-code-11");
+    const managerCookie = `${MANAGER_COOKIE_NAME}=${signAccessSession(
+      session as AccessSession,
+    )}`;
+
+    expect(readManagerSession(managerCookie)).not.toBeNull();
+
+    process.env.MANAGER_CODE = "another-manager-code-11";
+
+    expect(readManagerSession(managerCookie)).toBeNull();
   });
 
   it("не помещает код в разметку страницы доступа", () => {

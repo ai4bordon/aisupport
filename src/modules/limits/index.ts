@@ -121,6 +121,32 @@ export async function checkDailyDialogs(): Promise<RateLimitDecision> {
 }
 
 /**
+ * Чтение суточного счётчика диалогов без увеличения.
+ *
+ * Проверка лимита не равна запуску диалога: запрос к барьеру не должен
+ * расходовать квоту диалога, иначе один диалог из нескольких запросов
+ * съедал бы счётчик.
+ */
+export async function peekDailyDialogs(): Promise<RateLimitDecision> {
+  const limit = dailyDialogLimit();
+  const now = new Date();
+  const windowStart = dayWindowStart(now);
+  const counter = await readCounter("dialogs_daily", STAND_BUCKET_KEY, windowStart);
+
+  if (counter.counter < limit) {
+    return { allowed: true, reason: "ok", retryAfterSeconds: null, limit };
+  }
+  const nextDay = new Date(windowStart);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  return {
+    allowed: false,
+    reason: "daily_limit",
+    retryAfterSeconds: secondsUntil(nextDay),
+    limit,
+  };
+}
+
+/**
  * Проверка бюджета модели: 30 ₽ в час и 300 ₽ в сутки.
  *
  * Потолок применяется к часовому окну: при его достижении новые вызовы
