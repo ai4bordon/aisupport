@@ -9,11 +9,12 @@
 |---|---|
 | Контракт | `docs/api-contract.md` заморожен. Изменение — только через exec с записью в дом |
 | Модель данных | `docs/data-model.md` заморожена |
-| Общие файлы | `package.json`, `tsconfig.json`, `next.config.ts`, `vitest.config.ts`, роутер — правятся только exec после слияния волны |
+| Общие файлы | `package.json`, `tsconfig.json`, `next.config.ts`, `vitest.config.ts`, `src/app/styles/tokens.css`, роутер — правятся только exec после слияния волны |
 | Миграции | Номера закреплены exec, агент числа не назначает |
 | Тесты | Red → Green → Refactor. Падающий тест обязателен: сначала тест, потом код |
 | Ресурсы | 4 vCPU, 8 ГБ. Юнит-тесты агента — пул из 2 форков. Тяжёлые прогоны (12, 13) — по одному |
 | Токены и ключи | Только переменные окружения. Не в репозитории, журналах, evidence и переписке |
+| Цвета | Только переменные из `src/app/styles/tokens.css` (R26, ADR-0012). Свои hex в срезах не заводятся |
 | Базы | Своя база на срез, имя с суффиксом тикета. Порт 5433 локальный |
 
 ## Локальная база
@@ -24,12 +25,12 @@
 
 | Срез | Тикет | Агент | Ветка | Worktree | Шаги плана | Каталог | Команда проверки | База |
 |---|---|---|---|---|---|---|---|---|
-| Ядро и веб-чат | 01 | agent-core | `slice/01-core-web-chat` | `.worktrees/01-core-web-chat` | `docs/plans/01-web-chat-kb-escalation.md` — задачи 1–6 | `src/core/**`, `src/db/**`, `src/contracts/**`, `src/app/api/chat/**`, `src/app/api/agent/**`, `src/app/api/health/**`, `src/app/api/kb/**`, `src/app/widget/**`, `src/modules/knowledge/index.ts`, `src/modules/knowledge/search.ts`, `src/modules/policy/**`, `src/modules/telemetry/**` | `npm run test -- tests/integration/01-web-chat-kb-escalation.test.ts` | `support_agent_01` |
-| Документы: КП и счёт | 02 | agent-docs | `slice/02-quote-invoice` | `.worktrees/02-quote-invoice` | `docs/plans/02-quote-invoice.md` — задачи 1–2 | `src/modules/documents/**`, `src/app/api/docs/**` | `npm run test -- tests/integration/02-quote-invoice.test.ts` | `support_agent_02` |
-| MAX-адаптер | 05 | agent-max | `slice/05-max-polling` | `.worktrees/05-max-polling` | `docs/plans/05-max-polling-adapter.md` — задачи 1–2 | `src/channels/max/**`, `src/app/api/max/**` | `npm run test -- tests/integration/05-max-polling-adapter.test.ts` | `support_agent_05` |
-| Барьер доступа к стенду | 11 | agent-access | `slice/11-access-guard` | `.worktrees/11-access-guard` | `docs/plans/11-public-demo-access.md` — задачи 1–2 | `src/modules/access/**`, `src/modules/limits/**`, `src/app/access/**`, `src/app/api/access/**` | `npm run test -- tests/integration/11-public-demo-access.test.ts` | `support_agent_11` |
-| Импорт фида каталога | 12 | agent-feed | `slice/12-import-feed` | `.worktrees/12-import-feed` | `docs/plans/12-import-catalog-feed.md` — задачи 1–2 | `src/import/catalog/**`, `src/modules/catalog/**`, `scripts/import-feed.ts` | `npm run test -- tests/integration/12-import-catalog-feed.test.ts` | `support_agent_12` |
-| Импорт базы знаний с сайта | 13 | agent-docs-site | `slice/13-import-knowledge` | `.worktrees/13-import-knowledge` | `docs/plans/13-import-knowledge-site.md` — задачи 1–2 | `src/import/knowledge/**`, `scripts/import-docs.ts` | `npm run test -- tests/integration/13-import-knowledge-site.test.ts` | `support_agent_13` |
+| Ядро и веб-чат | 01 | SliceCore | `slice/01-core-web-chat` | `.worktrees/01-core-web-chat` | `docs/plans/01-web-chat-kb-escalation.md` — задачи 1–6 | `src/core/**`, `src/db/**`, `src/contracts/**`, `src/app/api/chat/**`, `src/app/api/agent/**`, `src/app/api/health/**`, `src/app/api/kb/**`, `src/app/widget/**`, `src/modules/knowledge/index.ts`, `src/modules/knowledge/search.ts`, `src/modules/policy/**`, `src/modules/telemetry/**` | `npm run test -- tests/integration/01-web-chat-kb-escalation.test.ts` | `support_agent_01` |
+| Документы: КП и счёт | 02 | SliceDocuments | `slice/02-quote-invoice` | `.worktrees/02-quote-invoice` | `docs/plans/02-quote-invoice.md` — задачи 1–2 | `src/modules/documents/**`, `src/app/api/docs/**` | `npm run test -- tests/integration/02-quote-invoice.test.ts` | `support_agent_02` |
+| MAX-адаптер | 05 | SliceMax | `slice/05-max-polling` | `.worktrees/05-max-polling` | `docs/plans/05-max-polling-adapter.md` — задачи 1–2 | `src/channels/max/**`, `src/app/api/max/**` | `npm run test -- tests/integration/05-max-polling-adapter.test.ts` | `support_agent_05` |
+| Барьер доступа к стенду | 11 | SliceAccess | `slice/11-access-guard` | `.worktrees/11-access-guard` | `docs/plans/11-public-demo-access.md` — задачи 1–2 | `src/modules/access/**`, `src/modules/limits/**`, `src/app/access/**`, `src/app/api/access/**` | `npm run test -- tests/integration/11-public-demo-access.test.ts` | `support_agent_11` |
+| Импорт фида каталога | 12 | SliceFeed | `slice/12-import-feed` | `.worktrees/12-import-feed` | `docs/plans/12-import-catalog-feed.md` — задачи 1–2 | `src/import/catalog/**`, `src/modules/catalog/**`, `scripts/import-feed.ts` | `npm run test -- tests/integration/12-import-catalog-feed.test.ts` | `support_agent_12` |
+| Импорт базы знаний с сайта | 13 | SliceKnowledge | `slice/13-import-knowledge` | `.worktrees/13-import-knowledge` | `docs/plans/13-import-knowledge-site.md` — задачи 1–2 | `src/import/knowledge/**`, `scripts/import-docs.ts` | `npm run test -- tests/integration/13-import-knowledge-site.test.ts` | `support_agent_13` |
 
 ## Диапазоны миграций
 
@@ -48,7 +49,9 @@
 | Очередь | Срезы | Почему |
 |---|---|---|
 | Параллельно | 01, 02, 05, 11 | Лёгкие: только юнит-тесты, своя база, тяжёлых прогонов нет |
-| Последовательно | 12, затем 13 | Тяжёлые: импорт 136 040 позиций и обход сайта. По одному, чтобы не уронить 4 vCPU |
+| Параллельно, с ограничением | 12, затем 13 | Тяжёлые: импорт 136 040 позиций и обход сайта. Один тяжёлый прогон за раз, чтобы не уронить 4 vCPU |
+
+Срез 05 пишется против замороженного контракта `/agent/run`, а не против кода ядра: его интеграционный тест работает на заглушке сервера ядра. Живая проверка на `@se15151074_bot` — после слияния среза 01, делает exec.
 
 ## Слияние
 
