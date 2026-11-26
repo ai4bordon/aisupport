@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { DocumentError, renderQuote } from "@/modules/documents";
+import type { QuoteInput } from "@/modules/documents";
 
 const lineSchema = z.object({
   offerId: z.string().min(1),
