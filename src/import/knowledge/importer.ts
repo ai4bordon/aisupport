@@ -180,6 +180,8 @@ async function importPage(
   const sourceIdValue = source.rows[0]?.id ?? id;
 
   // Статья — владелец чанков: у чанка ровно один владелец (документ или статья).
+  // Идентификатор статьи совпадает с идентификатором источника: источник и
+  // его цитируемые чанки описывают один и тот же материал заказчика.
   await client.query(
     `INSERT INTO kb_articles (
        id, tenant_id, title, body_md, status, version, valid_from, owner, approved_at
@@ -191,7 +193,7 @@ async function importPage(
        valid_from = EXCLUDED.valid_from,
        owner = EXCLUDED.owner,
        approved_at = EXCLUDED.approved_at`,
-    [id, tenantId, page.title, page.text, page.crawledAt],
+    [sourceIdValue, tenantId, page.title, page.text, page.crawledAt],
   );
 
   const content: SourceContent = {
@@ -206,7 +208,7 @@ async function importPage(
   // Старые чанки статьи заменяются целиком: содержание источника обновилось.
   await client.query("DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id = $2", [
     tenantId,
-    id,
+    sourceIdValue,
   ]);
 
   const pageNo = pageNoFrom(page.sectionPath);
@@ -216,7 +218,7 @@ async function importPage(
       `INSERT INTO kb_chunks (
          tenant_id, article_id, chunk_no, page_no, text, search_vector, embedding
        ) VALUES ($1, $2, $3, $4, $5, to_tsvector('russian', $5), $6::vector)`,
-      [tenantId, id, chunk.chunkNo, pageNo, chunk.text, vectorLiteral(vector)],
+      [tenantId, sourceIdValue, chunk.chunkNo, pageNo, chunk.text, vectorLiteral(vector)],
     );
   }
 
