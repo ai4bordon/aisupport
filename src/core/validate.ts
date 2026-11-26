@@ -1,5 +1,5 @@
 import type { Source } from "@/contracts/chat";
-import { findRawPersonalData } from "@/core/mask";
+import { findRawPersonalDataValues } from "@/core/mask";
 
 /**
  * Валидатор ответов агента.
@@ -53,6 +53,7 @@ function sourceAmounts(source: Source): Set<number> {
 export function validateAnswer(
   answer: CandidateAnswer,
   sources: Source[],
+  allowedPersonalValues: readonly string[] = [],
 ): ValidationResult {
   const violations: ValidationViolation[] = [];
 
@@ -89,11 +90,17 @@ export function validateAnswer(
     }
   }
 
-  const rawClasses = findRawPersonalData(answer.text);
-  if (rawClasses.length > 0) {
+  // Сырые ПД в исходящем тексте блокируют отправку. Значения, которые уже
+  // известны серверу (восстановлены по таблице соответствий), утечкой не
+  // считаются: клиент законно получает свои же данные обратно.
+  const knownValues = new Set(allowedPersonalValues.map((value) => value.toLowerCase()));
+  const leaked = findRawPersonalDataValues(answer.text).filter(
+    (value) => !knownValues.has(value.toLowerCase()),
+  );
+  if (leaked.length > 0) {
     violations.push({
       code: "raw_pii_in_outgoing",
-      detail: `В исходящем тексте остались необработанные персональные данные: ${rawClasses.join(", ")}.`,
+      detail: `В исходящем тексте остались необработанные персональные данные: ${leaked.join(", ")}.`,
     });
   }
 

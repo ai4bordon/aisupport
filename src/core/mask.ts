@@ -51,6 +51,95 @@ type Rule = {
  * У всех правил обязателен флаг `g`: без него `exec` не продвигает курсор
  * и повторный поиск зацикливается.
  */
+/**
+ * Слова, которые в русском тексте стоят с заглавной буквы, но не являются
+ * именами: «Как», «Нужна», «Электронная» в начале предложения.
+ *
+ * Без этого списка правило одноимённого маскирования склеило бы обычные
+ * слова в метки и сломало бы поиск по БЗ.
+ */
+const NOT_A_NAME = new Set([
+  "а",
+  "без",
+  "в",
+  "весь",
+  "вот",
+  "все",
+  "всего",
+  "вы",
+  "где",
+  "да",
+  "для",
+  "до",
+  "его",
+  "ее",
+  "её",
+  "если",
+  "есть",
+  "же",
+  "за",
+  "здесь",
+  "и",
+  "из",
+  "или",
+  "им",
+  "их",
+  "к",
+  "как",
+  "какая",
+  "какой",
+  "когда",
+  "кто",
+  "ли",
+  "может",
+  "можно",
+  "мои",
+  "мы",
+  "на",
+  "надо",
+  "наш",
+  "не",
+  "нет",
+  "ни",
+  "но",
+  "нужно",
+  "о",
+  "об",
+  "он",
+  "она",
+  "они",
+  "оно",
+  "от",
+  "перед",
+  "по",
+  "под",
+  "после",
+  "при",
+  "про",
+  "с",
+  "скажите",
+  "так",
+  "также",
+  "то",
+  "тоже",
+  "той",
+  "том",
+  "ты",
+  "у",
+  "хотя",
+  "хочу",
+  "чего",
+  "чем",
+  "что",
+  "чтобы",
+  "чуть",
+  "эта",
+  "эти",
+  "это",
+  "этого",
+  "я",
+]);
+
 const RULES: Rule[] = [
   {
     kind: "EMAIL",
@@ -103,6 +192,21 @@ const RULES: Rule[] = [
   {
     kind: "PERSON",
     pattern: /(?<![\p{L}\p{N}])[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,2}(?![\p{L}\p{N}])/dug,
+  },
+  {
+    // Одно имя: «Иван из ООО», «для Иванова». Слово должно стоять в
+    // именной позиции — рядом с предлогом или частицей, — иначе обычные
+    // слова в начале фразы («Электронная лицензия») были бы помечены.
+    kind: "PERSON",
+    pattern:
+      /(?<![\p{L}\p{N}])(?:для|от|у|с|к|до|за|по)\s+([А-ЯЁ][а-яё]+)(?![\p{L}\p{N}])/dugi,
+    group: 1,
+  },
+  {
+    kind: "PERSON",
+    pattern:
+      /(?<![\p{L}\p{N}])([А-ЯЁ][а-яё]+)(?=\s+(?:из|от|для|у|с)(?![\p{L}\p{N}]))/dugi,
+    group: 1,
   },
 ];
 
@@ -171,6 +275,14 @@ export function maskPersonalData(text: string, scope: MaskScope = {}): MaskResul
 
     // Заменяем справа налево, чтобы смещения не «поехали».
     for (const hit of matches.reverse()) {
+      // Обычные слова с заглавной буквы именами не являются.
+      if (
+        rule.kind === "PERSON" &&
+        NOT_A_NAME.has(hit.value.toLowerCase())
+      ) {
+        continue;
+      }
+
       const key = dedupKey(rule.kind, hit.value);
       let label = labelByValue.get(key);
       if (!label) {
@@ -205,4 +317,29 @@ export function findRawPersonalData(text: string): MaskClass[] {
     if (match !== null) found.add(rule.kind);
   }
   return [...found];
+}
+
+/**
+ * Значения ПД, найденные в тексте без маскирования.
+ *
+ * Нужны для проверки исходящего текста: значение, совпадающее с уже
+ * известным (например, восстановленным по таблице соответствий), — не
+ * утечка; любое другое значение — утечка.
+ */
+export function findRawPersonalDataValues(text: string): string[] {
+  const found: string[] = [];
+  for (const rule of RULES) {
+    const pattern = new RegExp(rule.pattern.source, rule.pattern.flags);
+    let match = pattern.exec(text);
+    while (match !== null) {
+      const indices = match.indices?.[rule.group ?? 0];
+      if (indices) {
+        const value = text.slice(indices[0], indices[1]).trim();
+        if (value) found.push(value);
+      }
+      if (match[0].length === 0) pattern.lastIndex += 1;
+      match = pattern.exec(text);
+    }
+  }
+  return found;
 }
