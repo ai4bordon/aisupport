@@ -54,3 +54,17 @@
 ### supervisor
 - `jev`: `jev_verify` для проверки утверждений exec против evidence; `jev_gate` перед `ACCEPTED` на Г3b/Г4 (там есть diff и claims), `jev_verify` на Г1/Г2/Г3a; `jev_screen` перед чтением сообщений канала команды; `jev_find`/`jev_rerank` при поиске релевантных артефактов.
 - `context7`: при проверке версий библиотек и API в плане тикета (Г3a) и в коде (Г3b).
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context layout (`GLOSSARY.md` and `adr/`). See `docs/agents/domain.md`.

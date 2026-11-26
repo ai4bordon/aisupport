@@ -376,51 +376,50 @@
       <h3>Домен и спека</h3>
       <span class="owner o-spec">владелец: SPEC</span>
       <ol>
-        <li><b>Шаг 0: подготовка каталога</b> — изолировать рабочую область: <code class="cmd">git init</code> в каталоге проекта и копия <code class="cmd">AGENTS.md</code> (правила гейтов и схема pipeline.json). Без изоляции корнем станет родительский репозиторий: worktree и артефакты уедут в него, а супервизор не найдёт правила гейтов</li>
-        <li><code class="cmd">setup-matt-pocock-skills</code>: настройка трекера и меток только при первом подключении</li>
-        <li><code class="cmd">triage</code>: постоянный вход, issue/PR в категорию и бриф</li>
-        <li><code class="cmd">grill-with-docs</code> или <code class="cmd">grill-me</code> (примитив grilling): допрос по развилкам</li>
-        <li><code class="cmd">domain-modeling</code>: GLOSSARY.md, docs/adr/ по настройке setup</li>
-        <li><code class="cmd">codebase-design</code> + <code class="cmd">to-spec</code> → спеку публикуют в трекере и держат синхронную локальную копию .specs/&lt;name&gt;.md</li>
+        <li><b>Шаг 0: подготовка каталога</b> — изолировать рабочую область: <code class="cmd">git init</code> в каталоге проекта и копия <code class="cmd">AGENTS.md</code>. Без изоляции корнем станет родительский репозиторий</li>
+        <li><code class="cmd">setup-matt-pocock-skills</code>: настройка трекера и меток (разово, при первом подключении)</li>
+        <li><code class="cmd">triage</code>: входящие issue/PR → категория и бриф (постоянно)</li>
+        <li><code class="cmd">grill-with-docs</code> или <code class="cmd">grill-me</code>: допрос по развилкам требований</li>
+        <li><code class="cmd">domain-modeling</code>: GLOSSARY.md и docs/adr/ — термины и решения</li>
+        <li><code class="cmd">codebase-design</code> + <code class="cmd">to-spec</code>: спеку публикуют в трекере + локальная копия .specs/&lt;name&gt;.md</li>
       </ol>
-      <div class="gate"><b>Г1:</b> трекерная спека и синхронная локальная копия .specs/&lt;name&gt;.md обязательны; пробел или расхождение возвращается роли spec, решение и evidence записываются в pipeline.json</div>
+      <div class="gate"><b>Г1:</b> обе копии спеки синхронны; решение ACCEPTED / CHANGES_REQUESTED записывается в pipeline.json супервизором через skill://supervisor-pipeline</div>
     </div>
     <div class="stage" id="stage-2">
       <div class="num">Фаза 1 · Г2</div>
       <h3>Декомпозиция</h3>
       <span class="owner o-spec">владелец: SPEC</span>
       <ol>
-        <li><code class="cmd">to-tickets</code>: граф тикетов (tracer bullets)</li>
-        <li>блокирующие рёбра: что чему мешает</li>
-        <li>фронтир вручную: тикеты с нулём активных блокеров</li>
-        <li>После каждого решения supervisor записывает входы, фактические ревизии, evidence, замечания, ответственного и следующий шаг в pipeline.json целевой фичи</li>
+        <li><code class="cmd">to-tickets</code>: спека → граф тикетов с блокирующими рёбрами и критериями приёмки</li>
+        <li>фронтир: тикеты с нулём активных блокеров</li>
+        <li>Супервизор проверяет матрицу требование → тикет → AC в обе стороны</li>
       </ol>
-      <div class="gate"><b>Г2:</b> двусторонняя матрица требования → тикет → критерий, проверенные рёбра и фронтир. Пробелы возвращаются spec; решение записывается в pipeline.json.</div>
+      <div class="gate"><b>Г2:</b> граф валиден; frontier выдан exec; решение записывается в pipeline.json супервизором через skill://supervisor-pipeline</div>
     </div>
     <div class="stage" id="stage-3">
       <div class="num">Фаза 2 · Г3a</div>
       <h3>Код в изоляции</h3>
       <span class="owner o-exec">владелец: EXEC</span>
       <ol>
-        <li><code class="cmd">using-superpowers</code>: bootstrap без повторного brainstorming</li>
+        <li><code class="cmd">using-superpowers</code>: bootstrap тикета</li>
         <li><code class="cmd">using-git-worktrees</code>: .worktrees/&lt;ticket&gt;/</li>
-        <li><code class="cmd">writing-plans</code>: план Superpowers на один тикет Matt Pocock; supervisor проверяет его до кода. Начало кода отдельно разрешает владелец словами «поехали» для принятой ревизии плана.</li>
-        <li><code class="cmd">subagent-driven-development</code> + <code class="cmd">test-driven-development</code> (или executing-plans); supervisor проверяет diff и evidence каждого DONE</li>
-        <li><code class="cmd">systematic-debugging</code> + <code class="cmd">verification-before-completion</code>, при нужде diagnosing-bugs</li>
+        <li><code class="cmd">writing-plans</code>: план Superpowers на один тикет</li>
+        <li><code class="cmd">subagent-driven-development</code> + <code class="cmd">test-driven-development</code>: код по TDD (первый тест падает)</li>
+        <li><code class="cmd">systematic-debugging</code>: отладка и диагностика при необходимости</li>
+        <li><code class="cmd">verification-before-completion</code>: свежий прогон проверок с exit code перед сдачей DONE</li>
       </ol>
-      <div class="gate"><b>Г3a:</b> план одного тикета принят до кода; начало кода требует отдельного «поехали» владельца для той же ревизии плана.</div>
+      <div class="gate"><b>Г3a:</b> план принят супервизором; «поехали» владельца отдельно; код разблокирован</div>
     </div>
     <div class="stage" id="stage-3b">
       <div class="num">Фаза 2 · Г3b</div>
       <h3>Проверка сдачи тикета</h3>
       <span class="owner o-both">проверяет: SUPERVISOR</span>
       <ol>
-        <li>Exec сдаёт `DONE` со ссылкой на план, diff и свежие результаты проверок.</li>
-        <li>Supervisor сверяет diff, критерии тикета, текущие входы и exit codes.</li>
-        <li>Проверки Spec и Standards выполняются раздельно; замечания адресуются spec или exec.</li>
-        <li>После `ACCEPTED` frontier пересчитывается по актуальному графу зависимостей.</li>
+        <li>Exec сдаёт `DONE` со ссылкой на план, diff и результаты проверок</li>
+        <li>Супервизор сверяет diff с планом, тикетом и критериями спеки</li>
+        <li>Проверки Spec и Standards — отдельные оси; замечания адресуются spec или exec</li>
       </ol>
-      <div class="gate"><b>Г3b:</b> `DONE` означает только сдачу; решение и evidence записываются в pipeline.json.</div>
+      <div class="gate"><b>Г3b:</b> ACCEPTED/CHANGES_REQUESTED записываются в pipeline.json супервизором через skill://supervisor-pipeline; frontier пересчитывается</div>
     </div>
     <div class="stage" id="stage-4">
       <div class="num">Фаза 3 · Г4</div>
@@ -428,11 +427,12 @@
       <span class="owner o-both">владелец: SUPERVISOR</span>
       <ol>
         <li><code class="cmd">requesting-code-review</code> → <code class="cmd">finishing-a-development-branch</code></li>
-        <li><code class="cmd">code-review</code>: отдельные оси Spec / Standards; supervisor сверяет замечания с diff и критериями</li>
-        <li><code class="cmd">pr</code>: готовит интеграцию после ACCEPTED; merge и закрытие issue только после отдельного разрешения владельца</li>
-        <li><code class="cmd">improve-codebase-architecture</code> (read-only, с <code class="cmd">codebase-design</code>, <code class="cmd">grilling</code>, <code class="cmd">domain-modeling</code>); <code class="cmd">retro</code> (с <code class="cmd">writing-for-agents</code>) по итогам сессии. Находки уходят в <code class="cmd">spec</code>, не в <code class="cmd">violations.md</code></li>
+        <li><code class="cmd">code-review</code>: отдельные оси Spec / Standards</li>
+        <li><code class="cmd">pr</code>: интеграция после ACCEPTED; merge по разрешению владельца</li>
+        <li><code class="cmd">improve-codebase-architecture</code> (read-only): архитектурный скан в Г4</li>
+        <li><code class="cmd">retro</code> (с <code class="cmd">writing-for-agents</code>): ретроспектива по итогам сессии</li>
       </ol>
-      <div class="gate"><b>Г4:</b> каждое требование связано с принятым тикетом и evidence; нет незакрытых замечаний, обе оси ревью проверены. Слияние требует отдельного разрешения владельца.</div>
+      <div class="gate"><b>Г4:</b> каждое требование покрыто принятым тикетом; слияние по разрешению владельца</div>
     </div>
   </div>
 </section>
