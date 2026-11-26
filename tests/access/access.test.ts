@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,10 +18,41 @@ import {
   type AccessSession,
 } from "@/modules/access";
 
+/**
+ * Корень репозитория ищется от файла теста вверх до папки с `package.json`
+ * и каталогом `docs/`: глубина вложенности теста разная (корень репозитория
+ * и worktree среза), поэтому фиксированное число уровней вверх не подходит.
+ * Путь не зависит от того, откуда запущен прогон.
+ */
+function findRepoRoot(): string {
+  let current = dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    if (
+      existsSync(resolve(current, "package.json")) &&
+      existsSync(resolve(current, "docs"))
+    ) {
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      throw new Error("Корень репозитория не найден выше tests/access");
+    }
+    current = parent;
+  }
+}
+
+const REPO_ROOT = findRepoRoot();
+
 const TEST_CODE = "demo-test-code-11";
 const TEST_SECRET = "demo-test-session-secret-11";
 const COOKIE_NAME = "support_access";
 const MANAGER_COOKIE_NAME = "support_manager";
+
+/** Эталонный логотип из пакета заказчика. */
+const APPROVED_LOGO = resolve(
+  REPO_ROOT,
+  "docs/лого софтлайн/Софтлайн-решения+SOFL_Logo_rgb (2).png",
+);
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -206,7 +239,7 @@ describe("код доступа и подписанная cookie", () => {
     const { container } = render(createElement(AccessPage));
     const html = container.innerHTML;
     const css = await readFile(
-      resolve(process.cwd(), "src/app/access/styles.css"),
+      resolve(REPO_ROOT, "src/app/access/styles.css"),
       "utf8",
     );
 
@@ -222,19 +255,14 @@ describe("код доступа и подписанная cookie", () => {
     expect(String(metadata.title)).toContain("Софтлайн Решения");
 
     // Favicon — утверждённый файл логотипа без изменений: побайтово.
-    const icon = await readFile(resolve(process.cwd(), "src/app/access/icon.png"));
-    const approved = await readFile(
-      resolve(
-        process.cwd(),
-        "../../docs/лого софтлайн/Софтлайн-решения+SOFL_Logo_rgb (2).png",
-      ),
-    );
+    const icon = await readFile(resolve(REPO_ROOT, "src/app/access/icon.png"));
+    const approved = await readFile(APPROVED_LOGO);
     expect(icon.equals(approved)).toBe(true);
   });
 
   it("использует web-палитру и стек шрифтов из общих токенов", async () => {
     const tokens = await readFile(
-      resolve(process.cwd(), "src/app/styles/tokens.css"),
+      resolve(REPO_ROOT, "src/app/styles/tokens.css"),
       "utf8",
     );
 
@@ -250,7 +278,7 @@ describe("код доступа и подписанная cookie", () => {
 
   it("держит охранное поле логотипа не меньше его высоты", async () => {
     const css = await readFile(
-      resolve(process.cwd(), "src/app/access/styles.css"),
+      resolve(REPO_ROOT, "src/app/access/styles.css"),
       "utf8",
     );
 
@@ -262,7 +290,7 @@ describe("код доступа и подписанная cookie", () => {
 
     // Охранное поле общего токена — 24 px; логотип на странице выше.
     const tokens = await readFile(
-      resolve(process.cwd(), "src/app/styles/tokens.css"),
+      resolve(REPO_ROOT, "src/app/styles/tokens.css"),
       "utf8",
     );
     const tokenGuard = Number.parseInt(
