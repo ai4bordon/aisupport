@@ -98,7 +98,10 @@ async function main(): Promise<void> {
   }
 
   const report = options.sourcePath
-    ? await importFeed(options.sourcePath, { tenantSlug: options.tenantSlug })
+    ? await importFeed(options.sourcePath, {
+        tenantSlug: options.tenantSlug,
+        sourceUrl: options.sourceUrl,
+      })
     : await importFeed(options.sourceUrl ?? LIVE_FEED_URL, {
         tenantSlug: options.tenantSlug,
         fallbackPath: options.fallback,

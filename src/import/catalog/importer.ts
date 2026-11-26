@@ -371,6 +371,13 @@ export async function importFeed(
           })
         : source;
 
+  // Провенанс: живой фид — источник истины, даже если импорт шёл с запасного
+  // снимка на диске. Так по карточке видно, откуда взяты позиции.
+  const provenanceUrl = feedSource.sourceUrl ?? options.sourceUrl ?? null;
+  if (provenanceUrl !== null && feedSource.sourceUrl === null) {
+    feedSource.sourceUrl = provenanceUrl;
+  }
+
   const pool = getPool();
   const client = await pool.connect();
   const paramNames = new Set<string>();

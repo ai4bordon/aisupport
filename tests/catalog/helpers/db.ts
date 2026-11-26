@@ -50,9 +50,17 @@ function splitMigration(content: string): { up: string; down: string | null } {
   return { up: strip(up), down: down === null ? null : strip(down) };
 }
 
+async function tableExists(client: pg.Client, table: string): Promise<boolean> {
+  const result = await client.query<{ exists: boolean }>(
+    `SELECT to_regclass($1) IS NOT NULL AS exists`,
+    [`public.${table}`],
+  );
+  return result.rows[0]?.exists === true;
+}
+
 /**
  * Применяет миграции среза каталога, если их ещё нет в базе.
- * Миграции ядра (`110_tenants.sql`) принадлежат другому срезу: если её ещё нет
+ * Миграции ядра (`110_tenants.sql`) принадлежат другому срезу: пока её нет
  * в репозитории, таблица `tenants` создаётся заглушкой по docs/data-model.md §3.1,
  * чтобы тесты среза не зависели от графика соседнего среза.
  */
@@ -65,15 +73,6 @@ export async function ensureSchema(): Promise<void> {
         run_on timestamp NOT NULL
       )
     `);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS tenants (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        slug text NOT NULL UNIQUE,
-        name text NOT NULL,
-        shadow_mode boolean NOT NULL DEFAULT false,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `);
 
     const applied = new Set(
       (await client.query("SELECT name FROM pgmigrations")).rows.map((row: { name: string }) => row.name),
@@ -82,8 +81,24 @@ export async function ensureSchema(): Promise<void> {
     const files = (await readdir(migrationsDir))
       .filter((name) => name.endsWith(".sql"))
       .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-    for (const name of files) {
-      if (applied.has(name)) continue;
+    const pending = files.filter((name) => !applied.has(name));
+
+    // Таблица `tenants` нужна миграциям каталога как внешний ключ. Пока
+    // миграция ядра не слита, создаём заглушку; после слияния создаст ядро.
+    const coreWillCreateTenants = pending.some((name) => name.startsWith("110_"));
+    if (!coreWillCreateTenants && !(await tableExists(client, "tenants"))) {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenants (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          slug text NOT NULL UNIQUE,
+          name text NOT NULL,
+          shadow_mode boolean NOT NULL DEFAULT false,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+    }
+
+    for (const name of pending) {
       const { up } = splitMigration(await readFile(join(migrationsDir, name), "utf8"));
       await client.query("BEGIN");
       try {
