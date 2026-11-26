@@ -148,7 +148,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -180,7 +179,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -204,7 +202,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -226,7 +223,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
     const requestsAfterFirst = requests.length;
 
@@ -237,7 +233,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -263,7 +258,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -291,7 +285,6 @@ describe("crawlSite", () => {
       userAgent: "SoftlineSupportBot/1.0 (+https://github.com/ai4bordon/aisupport)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -315,7 +308,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 1,
-      baseUrl,
     });
 
     await stopSite(server);
@@ -336,7 +328,6 @@ describe("crawlSite", () => {
       userAgent: "TestBot/1.0 (+contact@example.com)",
       cacheDir,
       timeBudgetMs: 30_000,
-      baseUrl,
     });
 
     await stopSite(server);

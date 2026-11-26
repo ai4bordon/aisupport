@@ -111,13 +111,12 @@ function extractLinks(html: string, pageUrl: string): string[] {
 }
 
 function sleep(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  if (ms <= 0) {
-    resolve();
-    return promise;
-  }
-  setTimeout(resolve, ms);
-  return promise;
+  if (ms <= 0) return Promise.resolve();
+  // Promise.withResolvers доступен в Node 22, но не описан в lib ES2023,
+  // поэтому таймер ожидания пишется без него.
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 /**
