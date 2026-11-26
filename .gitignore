@@ -35,6 +35,8 @@ next-env.d.ts
 *.sqlite3
 .pgdata/
 .cache/
+.cache_*.txt
+*.tsbuildinfo.bak
 
 # Редакторы и ОС
 .vscode/

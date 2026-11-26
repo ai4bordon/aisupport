@@ -11,7 +11,9 @@
 | Расширение | `vector` — создаётся миграцией `100_extensions.sql` |
 | Пользователь | `postgres`, пароль задаётся при запуске |
 
-## Запуск
+## База
+
+Контейнер поднимается один раз на машину, базы создаются в нём. Основная база основной ветки — `support_agent`; срезы используют свои базы с суффиксом тикета.
 
 ```bash
 docker run -d --name support-agent-pg \
@@ -19,6 +21,12 @@ docker run -d --name support-agent-pg \
   -e POSTGRES_DB=support_agent \
   -p 5433:5432 \
   pgvector/pgvector:pg16
+```
+
+Если контейнер уже поднят, а базы нет:
+
+```bash
+docker exec support-agent-pg createdb -U postgres support_agent
 ```
 
 Проверка готовности:
@@ -36,6 +44,8 @@ docker exec support-agent-pg createdb -U postgres support_agent_01
 ```
 
 Имена баз по срезам: `support_agent_01`, `support_agent_02`, `support_agent_05`, `support_agent_11`, `support_agent_12`, `support_agent_13`.
+
+Тесты не должны полагаться на данные, оставшиеся от прошлых прогонов: каждый файл создаёт себе tenant с уникальным слагом и удаляет его в конце.
 
 ## Подключение
 
