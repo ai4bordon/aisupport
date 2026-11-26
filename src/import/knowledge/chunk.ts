@@ -125,12 +125,12 @@ export function chunkSource(source: SourceContent): Chunk[] {
 }
 
 /**
- * Раскладывает предложения по чанкам так, чтобы размеры были ровными.
+ * Раскладывает предложения по чанкам.
  *
- * Число чанков считается от объёма текста и ограничено снизу: каждый чанк
- * должен вмещать минимум. Границы ставятся по пропорциональным позициям
- * в тексте и округляются до ближайшей границы предложения, поэтому размеры
- * чанков близки, а последний не остаётся коротким.
+ * Жёсткое ограничение — максимум: чанк никогда не превышает `maxBody`.
+ * Мягкое — доля: чанк закрывается, когда набрана своя часть текста, если
+ * остатка хватает на остальные чанки по минимуму. Границы остаются на
+ * границах предложений.
  */
 function splitEvenly(
   sentences: string[],
@@ -141,65 +141,44 @@ function splitEvenly(
   if (sentences.length === 0) return [];
 
   const count = sentences.length;
-  const prefix: number[] = [0];
-  for (const sentence of sentences) {
-    prefix.push((prefix[prefix.length - 1] ?? 0) + sentence.length);
-  }
-  const total = prefix[count] ?? 0;
+  const total = sentences.reduce((sum, sentence) => sum + sentence.length, 0);
 
+  // Столько чанков нужно, чтобы уложиться в целевой размер...
   const byTarget = Math.ceil(total / targetBody);
-  // Больше чанков брать нельзя: тогда каждый окажется короче минимума.
+  // ...и столько — чтобы каждый не опустился ниже минимума.
   const byMinimum = Math.max(1, Math.floor(total / minBody));
   const chunkCount = Math.max(1, Math.min(byTarget, byMinimum, count));
 
-  // Длина чанка из предложений с индексами от first до last включительно.
-  const lengthOf = (first: number, last: number): number =>
-    (prefix[last + 1] ?? 0) - (prefix[first] ?? 0) + (last - first);
-
-  const boundaries: number[] = [];
-  let start = 0;
-  for (let chunk = 1; chunk < chunkCount; chunk += 1) {
-    const desired = (chunk / chunkCount) * total;
-    const remainingChunks = chunkCount - chunk;
-
-    // Ищем границу, ближайшую к желаемой позиции, с допустимой длиной.
-    let best = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (let last = start; last < count; last += 1) {
-      const length = lengthOf(start, last);
-      if (length > maxBody) break;
-      if (length < minBody) continue;
-      // После границы должно хватить текста на остальные чанки.
-      const rest = (prefix[count] ?? 0) - (prefix[last + 1] ?? 0) + (count - last - 1);
-      if (rest < remainingChunks * minBody) continue;
-
-      const distance = Math.abs((prefix[last + 1] ?? 0) - desired);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = last;
-      }
-    }
-
-    if (best === -1) {
-      // Подходящей границы нет — chunk забирает максимум возможного.
-      let last = start;
-      while (last + 1 < count && lengthOf(start, last + 1) <= maxBody) last += 1;
-      boundaries.push(last);
-      start = last + 1;
-      continue;
-    }
-
-    boundaries.push(best);
-    start = best + 1;
-  }
-
   const groups: string[] = [];
-  let first = 0;
-  for (const boundary of boundaries) {
-    groups.push(sentences.slice(first, boundary + 1).join(" "));
-    first = boundary + 1;
+  let index = 0;
+  let chunk = 0;
+
+  // Цикл идёт, пока текст не закончился: плановое число чанков задаёт долю,
+  // но если текст в неё не уложился, добавляются дополнительные чанки.
+  while (index < count) {
+    const isLastPlanned = chunk >= chunkCount - 1;
+    // Бюджет чанка — своя доля текста; за её пределами берём максимум.
+    const budget = isLastPlanned ? Number.POSITIVE_INFINITY : ((chunk + 1) / chunkCount) * total;
+    const group: string[] = [];
+    let length = 0;
+
+    while (index < count) {
+      const sentence = sentences[index];
+      if (sentence === undefined) break;
+      const addition = group.length === 0 ? sentence.length : sentence.length + 1;
+
+      if (group.length > 0 && length + addition > maxBody) break;
+      // Бюджет достигнут — чанк закрываем, если дальше есть ещё предложения.
+      if (group.length > 0 && length >= budget && !isLastPlanned) break;
+
+      group.push(sentence);
+      length += addition;
+      index += 1;
+    }
+
+    if (group.length > 0) groups.push(group.join(" "));
+    chunk += 1;
   }
-  groups.push(sentences.slice(first).join(" "));
 
   balanceGroups(groups, minBody, maxBody);
   return groups;

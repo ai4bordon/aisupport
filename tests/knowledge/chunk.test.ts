@@ -133,4 +133,37 @@ describe("chunkSource", () => {
     expect(first[0]?.articleId).toBe(second[0]?.articleId);
     expect(first[0]?.articleId).not.toBe(third[0]?.articleId);
   });
+
+  it("длинный текст не даёт чанков длиннее верхней границы", () => {
+    // Страницы заказчика встречаются с разной длиной текста: хвост
+    // страницы не должен вылезать за 1200 знаков.
+    for (const sentences of [3, 7, 13, 40, 97]) {
+      const chunks = chunkSource({
+        url: `https://docs.softline.com/ru-ru/id/page-${sentences}`,
+        title: "Заголовок страницы",
+        sectionPath: "Softline ID / Раздел",
+        text: makeText(sentences),
+        crawledAt: "2026-11-26T10:00:00.000Z",
+      });
+
+      expect(chunks.length).toBeGreaterThan(0);
+      for (const chunk of chunks) {
+        expect(chunk.text.length).toBeLessThanOrEqual(1200);
+      }
+    }
+  });
+
+  it("пустой текст не даёт пустых чанков", () => {
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/id/empty",
+      title: "Пусто",
+      sectionPath: "",
+      text: "",
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.trim().length).toBeGreaterThan(0);
+    }
+  });
 });
