@@ -31,6 +31,8 @@ export type ImportReport = {
   sources: number;
   chunks: number;
   failed: number;
+  /** Источники без чанков: текст короче минимального размера чанка. */
+  skipped: number;
 };
 
 export type ImportOptions = {
@@ -49,6 +51,8 @@ export type ImportOptions = {
 export type ImportDocsSiteOptions = CrawlOptions & ImportOptions;
 
 const DEFAULT_TENANT_SLUG = "demo-tenant";
+/** Минимальный размер чанка: контракт §8.2 — 800–1200 знаков. */
+const MIN_CHUNK_LENGTH = 800;
 const DOCS_ORIGIN = "docs_site";
 const STORE_ORIGIN = "store_page";
 
@@ -92,7 +96,7 @@ export async function importCrawledPages(
   pages: CrawledPage[],
   options: ImportOptions = {},
 ): Promise<ImportReport> {
-  if (pages.length === 0) return { sources: 0, chunks: 0, failed: 0 };
+  if (pages.length === 0) return { sources: 0, chunks: 0, failed: 0, skipped: 0 };
 
   const pool = createPool();
   const embeddingProvider =
@@ -105,6 +109,7 @@ export async function importCrawledPages(
   let sources = 0;
   let chunks = 0;
   let failed = 0;
+  let skipped = 0;
 
   try {
     const tenant = await client.query<{ id: string }>(
@@ -121,6 +126,7 @@ export async function importCrawledPages(
         const written = await importPage(client, tenantId, page, embeddingProvider, options);
         sources += written.sources;
         chunks += written.chunks;
+        skipped += written.skipped;
       } catch (error) {
         failed += 1;
         console.error(`Импорт не удался: ${page.url}: ${(error as Error).message}`);
@@ -131,7 +137,7 @@ export async function importCrawledPages(
     await pool.end();
   }
 
-  return { sources, chunks, failed };
+  return { sources, chunks, failed, skipped };
 }
 
 /** Запись одной страницы: источник, статья, чанки, снимок. */
@@ -141,7 +147,7 @@ async function importPage(
   page: CrawledPage,
   embeddingProvider: EmbeddingProvider,
   options: ImportOptions,
-): Promise<{ sources: number; chunks: number }> {
+): Promise<{ sources: number; chunks: number; skipped: number }> {
   const origin = options.extraOrigin ?? (page.url.includes("store.softline.ru") ? STORE_ORIGIN : DOCS_ORIGIN);
   const domain = origin === STORE_ORIGIN ? "store.softline.ru" : "docs.softline.com";
   const provenance = options.extraProvenance ?? provenanceFor(domain, page.crawledAt);
@@ -205,6 +211,11 @@ async function importPage(
   };
   const chunkList = chunkSource(content);
 
+  // Страница-оглавление раздела не несёт текста статьи: чанк из неё был бы
+  // короче минимального размера. Такой источник сохраняется, но в поиск не
+  // попадает — как и материал, который нечего цитировать.
+  const usable = chunkList.filter((chunk) => chunk.text.length >= MIN_CHUNK_LENGTH);
+
   // Старые чанки статьи заменяются целиком: содержание источника обновилось.
   await client.query("DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id = $2", [
     tenantId,
@@ -212,7 +223,7 @@ async function importPage(
   ]);
 
   const pageNo = pageNoFrom(page.sectionPath);
-  for (const chunk of chunkList) {
+  for (const chunk of usable) {
     const vector = await embeddingProvider.embed(chunk.text);
     await client.query(
       `INSERT INTO kb_chunks (
@@ -236,7 +247,7 @@ async function importPage(
     [tenantId, sourceIdValue, hash, provenance, page.crawledAt],
   );
 
-  return { sources: 1, chunks: chunkList.length };
+  return { sources: 1, chunks: usable.length, skipped: usable.length === 0 ? 1 : 0 };
 }
 
 /** Вектор в формате PostgreSQL: `[0.1,0.2]`. */
@@ -257,6 +268,7 @@ export async function importDocsSite(options: ImportDocsSiteOptions): Promise<Im
     sources: imported.sources,
     chunks: imported.chunks,
     failed: imported.failed + report.failed,
+    skipped: imported.skipped,
   };
 }
 

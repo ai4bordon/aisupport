@@ -323,6 +323,43 @@ describe("crawlSite", () => {
     expect(report.stoppedReason).toBe("time_budget");
   });
 
+  it("в режиме только кэша не обращается к сайту за непрокэшированными страницами", async () => {
+    const routes = new Map<string, Route>([
+      ["/root/", { status: 200, tag: "root", body: page("Корень", `<p>Корень.</p><a href="/a/">A</a>`, ["Раздел"]) }],
+      ["/a/", { status: 200, tag: "a", body: page("A", "<p>A.</p>", ["Раздел"]) }],
+    ]);
+    const { server, baseUrl, requests } = await startSite(routes);
+
+    // Первый заход кэширует только корень.
+    await crawlSite({
+      roots: [`${baseUrl}/root/`],
+      maxDepth: 0,
+      delayMs: 0,
+      userAgent: "TestBot/1.0 (+contact@example.com)",
+      cacheDir,
+      timeBudgetMs: 30_000,
+    });
+    const requestsAfterFirst = requests.length;
+
+    // Второй заход в режиме только кэша: страница из ссылки не загружается.
+    const report = await crawlSite({
+      roots: [`${baseUrl}/root/`],
+      maxDepth: 1,
+      delayMs: 0,
+      userAgent: "TestBot/1.0 (+contact@example.com)",
+      cacheDir,
+      timeBudgetMs: 30_000,
+      cacheOnly: true,
+    });
+
+    await stopSite(server);
+
+    expect(requests).toHaveLength(requestsAfterFirst);
+    expect(report.visited).toBe(0);
+    expect(report.cached).toBe(1);
+    expect(report.pages).toHaveLength(1);
+  });
+
   it("сохраняет сырой HTML в кэш на диск", async () => {
     const routes = new Map<string, Route>([
       ["/root/", { status: 200, tag: "root", body: page("Корень", "<p>Текст.</p>", ["Раздел"]) }],

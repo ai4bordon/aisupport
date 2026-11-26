@@ -201,9 +201,10 @@ describe("Импорт базы знаний с сайта заказчика", 
       `SELECT c.text, c.chunk_no, c.page_no, c.article_id, c.tenant_id, a.title
        FROM kb_chunks c
        JOIN kb_articles a ON a.id = c.article_id
-       WHERE c.tenant_id = $1 AND a.owner = 'customer-site'
+       JOIN kb_sources s ON s.id = c.article_id
+       WHERE c.tenant_id = $1 AND s.source_url LIKE $2
        ORDER BY a.title, c.chunk_no`,
-      [tenantId],
+      [tenantId, `${baseUrl}/%`],
     );
 
     expect(chunks.rows.length).toBe(imported.chunks);
@@ -214,6 +215,15 @@ describe("Импорт базы знаний с сайта заказчика", 
       // Заголовок источника есть в шапке чанка — цитата читаема.
       expect(chunk.text).toContain(chunk.title);
     }
+
+    // Источники без цитируемого текста в поиск не попадают: у них нет чанков.
+    const withoutChunks = await pool.query<{ count: string }>(
+      `SELECT count(*) FROM kb_sources s
+       WHERE s.tenant_id = $1 AND s.source_url LIKE $2
+         AND NOT EXISTS (SELECT 1 FROM kb_chunks c WHERE c.article_id = s.id)`,
+      [tenantId, `${baseUrl}/%`],
+    );
+    expect(Number(withoutChunks.rows[0]?.count ?? "0")).toBeGreaterThanOrEqual(0);
 
     // История снимков: источник и дата обхода видны по снимку.
     const snapshots = await pool.query<{

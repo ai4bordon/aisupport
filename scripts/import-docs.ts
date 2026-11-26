@@ -54,6 +54,7 @@ type Args = {
   includeStore: boolean;
   storeUrl: string;
   tenantSlug: string;
+  cacheOnly: boolean;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -88,6 +89,7 @@ function parseArgs(argv: string[]): Args {
     includeStore: !flags.has("no-store"),
     storeUrl: values.get("store-url") ?? STORE_URL,
     tenantSlug: values.get("tenant") ?? "demo-tenant",
+    cacheOnly: flags.has("cache-only"),
   };
 }
 
@@ -96,7 +98,9 @@ async function main(): Promise<void> {
   await mkdir(args.cacheDir, { recursive: true });
 
   const rootUrls = args.roots.map((root) => `${DOCS_BASE}/${root}/`);
-  console.log(`Обход: ${rootUrls.length} корневых разделов, глубина ${args.maxDepth}, пауза ${args.delayMs} мс`);
+  console.log(
+    `Обход: ${rootUrls.length} корневых разделов, глубина ${args.maxDepth}, пауза ${args.delayMs} мс${args.cacheOnly ? ", только кэш" : ""}`,
+  );
 
   const report = await crawlSite({
     roots: rootUrls,
@@ -105,6 +109,7 @@ async function main(): Promise<void> {
     userAgent: args.userAgent,
     cacheDir: args.cacheDir,
     timeBudgetMs: args.timeBudgetMs,
+    cacheOnly: args.cacheOnly,
   });
 
   console.log(
@@ -120,7 +125,9 @@ async function main(): Promise<void> {
     extraOrigin: "docs_site",
   });
 
-  console.log(`Импортировано источников: ${imported.sources}, чанков: ${imported.chunks}, ошибок: ${imported.failed}`);
+  console.log(
+    `Импортировано источников: ${imported.sources}, чанков: ${imported.chunks}, ошибок: ${imported.failed}, без чанков: ${imported.skipped}`,
+  );
 
   if (args.includeStore) {
     // Страница магазина — отдельный источник с происхождением store_page.
@@ -131,6 +138,7 @@ async function main(): Promise<void> {
       userAgent: args.storeUserAgent,
       cacheDir: args.cacheDir,
       timeBudgetMs: args.timeBudgetMs,
+      cacheOnly: args.cacheOnly,
     });
     const storeImported = await importCrawledPages(storeReport.pages, {
       tenantSlug: args.tenantSlug,
@@ -143,9 +151,12 @@ async function main(): Promise<void> {
     imported.sources += storeImported.sources;
     imported.chunks += storeImported.chunks;
     imported.failed += storeImported.failed;
+    imported.skipped += storeImported.skipped;
   }
 
-  console.log(`Итого: источников ${imported.sources}, чанков ${imported.chunks}, ошибок ${imported.failed}`);
+  console.log(
+    `Итого: источников ${imported.sources}, чанков ${imported.chunks}, ошибок ${imported.failed}, без чанков ${imported.skipped}`,
+  );
   process.exit(imported.failed > 0 ? 1 : 0);
 }
 

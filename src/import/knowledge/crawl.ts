@@ -27,6 +27,11 @@ export type CrawlOptions = {
   cacheDir: string;
   /** Таймбокс обхода в миллисекундах. */
   timeBudgetMs: number;
+  /**
+   * Только кэш: сайт не запрашивается, страницы вне кэша пропускаются.
+   * Нужен для пересборки импорта из уже собранного материала.
+   */
+  cacheOnly?: boolean;
 };
 
 export type CrawledPage = ExtractedPage & {
@@ -173,6 +178,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlReport> {
     }
 
     if (html === null) {
+      if (options.cacheOnly) {
+        // Страницы вне кэша пропускаются: сайт не запрашивается.
+        continue;
+      }
+
       const waitFor = lastRequestAt + delayMs - Date.now();
       if (waitFor > 0) await sleep(waitFor);
       if (Date.now() >= deadline) {
