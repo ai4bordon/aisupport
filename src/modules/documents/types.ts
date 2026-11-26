@@ -61,5 +61,15 @@ export type RenderedDocument = {
   amount: number;
 };
 
+/** Значения одной позиции расчёта для подстановки в таблицу документа. */
+export type LineValues = {
+  offerId: string;
+  name: string;
+  quantity: string;
+  price: string;
+  amount: string;
+  vat: string;
+};
+
 /** Коды ошибок модуля документов. */
 export type DocumentErrorCode = "document_field_missing" | "amount_mismatch";

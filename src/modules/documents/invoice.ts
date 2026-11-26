@@ -10,7 +10,8 @@
 import { join } from "node:path";
 
 import type { InvoiceInput, RenderedDocument } from "./types";
-import type { LineValues, TemplateValues } from "./render";
+import type { TemplateValues } from "./render";
+import type { LineValues } from "./types";
 import {
   DocumentError,
   assertAmountMatches,

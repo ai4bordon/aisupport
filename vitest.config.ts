@@ -14,10 +14,12 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./tests/setup.ts"],
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
-    // На машине 4 vCPU: ограничиваем число процессов, чтобы шесть агентов
+    // На машине 4 vCPU: ограничиваем число воркеров, чтобы шесть агентов
     // не запускали тесты одновременно и не выели память.
+    // В Vitest 5 опции test.poolOptions и maxForks удалены, ограничение
+    // задаётся top-level maxWorkers.
     pool: "forks",
-    maxForks: 2,
+    maxWorkers: 2,
     testTimeout: 20000,
     hookTimeout: 20000,
   },

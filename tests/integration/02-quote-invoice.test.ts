@@ -175,11 +175,18 @@ describe("Срез 02: КП и счёт", () => {
 
       await pool.query(
         `INSERT INTO templates (tenant_id, kind, name, body, placeholders, is_active)
-         VALUES ($1, 'quote', 'КП ПАО «Софтлайн»', $2, $3::jsonb, true)`,
+         VALUES ($1, 'quote', 'КП ПАО «Софтлайн»', $2, $3::jsonb, true)
+         ON CONFLICT (tenant_id, kind, name, version) DO NOTHING`,
         [tenantId, "Уважаемый заказчик! {{customerName}}", JSON.stringify(["customerName"])],
       );
 
       const rendered = await renderInvoice(invoiceInput(tenantId as string, conversationId));
+      // Номер счёта детерминирован, поэтому запись предыдущего прогона
+      // удаляется: тест не зависит от порядка запусков.
+      await pool.query(
+        "DELETE FROM documents WHERE tenant_id = $1 AND kind = 'invoice' AND number = $2",
+        [tenantId, rendered.number],
+      );
       await pool.query(
         `INSERT INTO documents (tenant_id, conversation_id, kind, number, amount, vat, pdf_path)
          VALUES ($1, $2, 'invoice', $3, $4, $5, $6)`,
@@ -187,8 +194,8 @@ describe("Срез 02: КП и счёт", () => {
       );
 
       const stored = await pool.query<{ number: string; pdf_path: string; conversation_id: string }>(
-        "SELECT number, pdf_path, conversation_id FROM documents WHERE tenant_id = $1 AND kind = 'invoice'",
-        [tenantId],
+        "SELECT number, pdf_path, conversation_id FROM documents WHERE tenant_id = $1 AND kind = 'invoice' AND number = $2",
+        [tenantId, rendered.number],
       );
       expect(stored.rows).toHaveLength(1);
       expect(stored.rows[0]?.number).toBe(rendered.number);

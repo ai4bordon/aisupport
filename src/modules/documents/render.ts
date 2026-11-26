@@ -16,7 +16,7 @@ import { join } from "node:path";
 
 import PDFDocument from "pdfkit";
 
-import type { DocumentErrorCode, RenderedDocument } from "./types";
+import type { DocumentErrorCode, LineValues, RenderedDocument } from "./types";
 import type { DocumentBlock, FontKey, TableColumn, TableRow } from "./templates";
 import {
   bodyFontSize,
@@ -143,7 +143,7 @@ function splitBySubset(text: string): Run[] {
 }
 
 type DrawContext = {
-  doc: PDFKit.PDFDocument;
+  doc: PDFDocument;
   values: TemplateValues;
 };
 
@@ -377,8 +377,11 @@ export async function renderDocument(input: RenderInput): Promise<RenderedDocume
 
   const chunks: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-  const { promise: finished, resolve: resolveFinished } = Promise.withResolvers<void>();
-  doc.on("end", resolveFinished);
+  // `Promise.withResolvers` требует lib ES2024, а проект собирается под
+  // ES2023: завершение PDF ждём на обычном промисе.
+  const finished = new Promise<void>((resolve) => {
+    doc.on("end", resolve);
+  });
 
   const context: DrawContext = { doc, values: input.values };
 
