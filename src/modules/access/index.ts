@@ -45,6 +45,11 @@ export type AccessRequest = {
   ip: string;
 };
 
+/** Запрос к кабинету менеджера: адрес IP для лимита запросов не нужен. */
+export type ManagerRequest = {
+  cookieHeader?: string | null;
+};
+
 /** HTTP-статус для решения барьера — по таблице ошибок контракта §2. */
 export function accessHttpStatus(decision: AccessDecision): number {
   switch (decision.reason) {
@@ -113,7 +118,7 @@ export async function checkAccess(request: AccessRequest): Promise<AccessDecisio
  * cookie стенда в кабинет не пускает (R17).
  */
 export async function checkManagerAccess(
-  request: AccessRequest,
+  request: ManagerRequest,
 ): Promise<AccessDecision> {
   const cookieHeader = request.cookieHeader ?? null;
   const raw = readCookieValue(cookieHeader, MANAGER_COOKIE_NAME);
