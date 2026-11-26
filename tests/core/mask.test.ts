@@ -53,7 +53,6 @@ describe("маскирование персональных данных", () =>
 
     const second = maskPersonalData("И ещё +7 (495) 123-45-67.", {
       mapping: first.mapping,
-      counters: { PHONE: 1 },
     });
     expect(second.maskedText).toContain("⟦PHONE_1⟧");
     expect(second.maskedFieldsCount).toBe(0);

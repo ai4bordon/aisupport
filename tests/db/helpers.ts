@@ -141,24 +141,42 @@ export function testPool(): Pool {
   return getPool();
 }
 
-/** Полная очистка данных среза между тестами; схема сохраняется. */
-export async function truncateSliceTables(): Promise<void> {
+/**
+ * Очистка данных конкретного арендатора.
+ *
+ * Тесты среза идут параллельно (Vitest запускает два воркера), поэтому
+ * общая очистка всех таблиц затирала бы фикстуры соседнего тестового
+ * файла. Каждый файл работает со своим арендатором и удаляет только его
+ * строки. Демо-тенант (`demo-tenant`) не трогаем: его использует код
+ * приложения.
+ */
+export async function resetTenant(slug: string): Promise<string> {
   await ensureSchema();
   const pool = getPool();
-  await pool.query(`
-    TRUNCATE TABLE
-      agent_steps,
-      escalations,
-      promises,
-      messages,
-      conversations,
-      kb_chunks,
-      kb_articles,
-      kb_documents,
-      policy_rules,
-      audit_log,
-      intent_taxonomy,
-      tenants
-    RESTART IDENTITY CASCADE
-  `);
+
+  const existing = await pool.query<{ id: string }>(
+    "SELECT id FROM tenants WHERE slug = $1",
+    [slug],
+  );
+  const existingId = existing.rows[0]?.id;
+  if (existingId) {
+    await pool.query("DELETE FROM kb_chunks WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM kb_articles WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM kb_documents WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM agent_steps WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM escalations WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM promises WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM messages WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM conversations WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM policy_rules WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM audit_log WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM intent_taxonomy WHERE tenant_id = $1", [existingId]);
+    await pool.query("DELETE FROM tenants WHERE id = $1", [existingId]);
+  }
+
+  const created = await pool.query<{ id: string }>(
+    "INSERT INTO tenants (slug, name) VALUES ($1, $2) RETURNING id",
+    [slug, `Тестовый арендатор ${slug}`],
+  );
+  return created.rows[0]?.id ?? "";
 }

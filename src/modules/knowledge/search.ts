@@ -10,7 +10,10 @@ import { toVectorLiteral } from "@/db/vector";
  */
 
 export type SearchResult = {
+  /** Идентификатор источника: статьи или документа. */
   articleId: string;
+  /** Тип источника: статья БЗ или документ БЗ. */
+  kind: "kb_article" | "kb_document";
   chunkId: string;
   title: string;
   text: string;
@@ -18,30 +21,87 @@ export type SearchResult = {
   score: number;
 };
 
-/** Провайдер эмбеддингов — граница, на которой подменяется внешний API. */
+/**
+ * Провайдер эмбеддингов — граница, на которой подменяется внешний API.
+ */
 export type EmbeddingProvider = {
   embed: (text: string) => Promise<number[]>;
 };
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
+const EMBEDDING_DIMENSIONS = 1536;
+
+/**
+ * Порог смысловой близости.
+ *
+ * Ниже порога вектор считается несовпадением: иначе поиск возвращал бы
+ * любой материал и подтверждённым источником считался бы нерелевантный
+ * фрагмент. 0.25 отделяет совпадение по теме от совпадения по формальному
+ * признаку.
+ */
+export const MIN_VECTOR_SIMILARITY = 0.25;
+
+/** Слова без смысловой нагрузки: в эмбеддинг не попадают. */
+const STOPWORDS = new Set([
+  "в",
+  "и",
+  "на",
+  "с",
+  "по",
+  "из",
+  "как",
+  "для",
+  "не",
+  "что",
+  "это",
+  "мне",
+  "мы",
+  "вы",
+  "их",
+  "его",
+  "для",
+  "или",
+  "быть",
+  "есть",
+  "который",
+]);
+
+/**
+ * Огрубление слова до основы.
+ *
+ * Полная морфология не нужна: достаточно, чтобы «лицензию» и «лицензия»
+ * давали одну координату, а «электронную» и «электронная» — другую.
+ */
+function stem(word: string): string {
+  return word.slice(0, 6);
+}
+
+function hashStem(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
 
 /**
  * Провайдер эмбеддингов по умолчанию.
  *
  * Без ключа владельца живой вызов недоступен, поэтому используется
- * детерминированная заглушка: она даёт одинаковый вектор для одинакового
- * текста. Живой вызов проверяется exec, когда владелец выдаст ключ.
+ * детерминированная заглушка: одинаковый текст даёт одинаковый вектор,
+ * а тексты по одной теме пересекаются по координатам. Живой вызов
+ * проверяется exec, когда владелец выдаст ключ.
  */
 export const deterministicEmbeddingProvider: EmbeddingProvider = {
   embed: async (text: string) => {
-    const vector = new Array<number>(1536).fill(0);
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
+    const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+    for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      if (raw.length < 3) continue;
+      if (STOPWORDS.has(raw)) continue;
+      vector[hashStem(stem(raw)) % EMBEDDING_DIMENSIONS] += 1;
     }
-    vector[Math.abs(hash) % 1536] = 1;
     return vector;
   },
 };
@@ -53,15 +113,6 @@ export function setEmbeddingProvider(provider: EmbeddingProvider): void {
   embeddingProvider = provider;
 }
 
-/** Первая строка чанка вида `Источник: <url>` — ссылка на источник. */
-function locationFromText(text: string, pageNo: number | null): string | null {
-  const firstLine = text.split("\n", 1)[0] ?? "";
-  const match = /^Источник:\s*(.+)$/u.exec(firstLine.trim());
-  if (match?.[1]) return match[1].trim();
-  if (pageNo !== null) return `с. ${pageNo}`;
-  return null;
-}
-
 /** Текст чанка без служебной шапки источника. */
 function bodyFromText(text: string): string {
   const lines = text.split("\n");
@@ -69,6 +120,24 @@ function bodyFromText(text: string): string {
     return lines.slice(1).join("\n").trim();
   }
   return text.trim();
+}
+
+/**
+ * Полнотекстовый запрос из значимых слов вопроса.
+ *
+ * Слова соединяются через «|» (ИЛИ), а не «&»: вопрос клиента обычно
+ * содержит несколько слов, из которых с источником совпадает только
+ * часть — «Какая скидка на лицензию?» должен находить статью о лицензии.
+ * При этом пустые и служебные слова отбрасываются, а «&» не мешает
+ * отсекать нерелевантные материалы.
+ */
+function buildTextQuery(query: string): string | null {
+  const terms = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length >= 3 && !STOPWORDS.has(term));
+  if (terms.length === 0) return null;
+  return terms.map((term) => `${term}:*`).join(" | ");
 }
 
 type ChunkRow = {
@@ -80,6 +149,26 @@ type ChunkRow = {
   page_no: number | null;
   score: number;
 };
+
+/**
+ * Ссылка на источник.
+ *
+ * Порядок: служебная шапка чанка (`Источник: <url>`), затем страница
+ * документа, затем раздел статьи. Если ничего нет — ссылка отсутствует:
+ * выдумывать её нельзя.
+ */
+function locationFromText(
+  text: string,
+  pageNo: number | null,
+  articleTitle: string | null,
+): string | null {
+  const firstLine = (text.split("\n", 1)[0] ?? "").trim();
+  const match = /^Источник:\s*(.+)$/u.exec(firstLine);
+  if (match?.[1]) return match[1].trim();
+  if (pageNo !== null) return `с. ${pageNo}`;
+  if (articleTitle !== null) return `ст. «${articleTitle}»`;
+  return null;
+}
 
 /**
  * Поиск по одобренным материалам.
@@ -116,10 +205,11 @@ export async function search(
         (c.article_id IS NOT NULL AND a.status = 'published')
         OR (c.document_id IS NOT NULL AND d.status = 'published')
       )
+      AND 1 - (c.embedding <=> $2::vector) >= $4
     ORDER BY c.embedding <=> $2::vector
     LIMIT $3
     `,
-    [tenantId, toVectorLiteral(embedding), boundedLimit],
+    [tenantId, toVectorLiteral(embedding), boundedLimit, MIN_VECTOR_SIMILARITY],
   );
 
   const seen = new Set<string>();
@@ -130,15 +220,17 @@ export async function search(
     seen.add(row.chunk_id);
     results.push({
       articleId: row.article_id ?? row.document_id ?? "",
+      kind: row.article_id ? "kb_article" : "kb_document",
       chunkId: row.chunk_id,
       title: row.title,
       text: bodyFromText(row.text),
-      location: locationFromText(row.text, row.page_no),
+      location: locationFromText(row.text, row.page_no, row.article_id ? row.title : null),
       score: Number(row.score),
     });
   }
 
-  if (results.length < boundedLimit) {
+  const textQuery = buildTextQuery(query);
+  if (textQuery !== null && results.length < boundedLimit) {
     const textResult = await pool.query<ChunkRow>(
       `
       SELECT
@@ -148,12 +240,12 @@ export async function search(
         COALESCE(a.title, d.filename) AS title,
         c.text,
         c.page_no,
-        ts_rank(c.search_vector, plainto_tsquery('russian', $2)) AS score
+        ts_rank(c.search_vector, to_tsquery('russian', $2)) AS score
       FROM kb_chunks c
       LEFT JOIN kb_articles a ON a.id = c.article_id
       LEFT JOIN kb_documents d ON d.id = c.document_id
       WHERE c.tenant_id = $1
-        AND c.search_vector @@ plainto_tsquery('russian', $2)
+        AND c.search_vector @@ to_tsquery('russian', $2)
         AND (
           (c.article_id IS NOT NULL AND a.status = 'published')
           OR (c.document_id IS NOT NULL AND d.status = 'published')
@@ -161,7 +253,7 @@ export async function search(
       ORDER BY score DESC
       LIMIT $3
       `,
-      [tenantId, query, boundedLimit],
+      [tenantId, textQuery, boundedLimit],
     );
 
     for (const row of textResult.rows) {
@@ -169,10 +261,11 @@ export async function search(
       seen.add(row.chunk_id);
       results.push({
         articleId: row.article_id ?? row.document_id ?? "",
+        kind: row.article_id ? "kb_article" : "kb_document",
         chunkId: row.chunk_id,
         title: row.title,
         text: bodyFromText(row.text),
-        location: locationFromText(row.text, row.page_no),
+        location: locationFromText(row.text, row.page_no, row.article_id ? row.title : null),
         score: Number(row.score),
       });
     }
