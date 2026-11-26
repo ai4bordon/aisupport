@@ -12,10 +12,12 @@ import { ensureDatabase, resetCounters } from "./helpers";
 const IP = "203.0.113.7";
 const TEST_CODE = "demo-test-code-11";
 const TEST_SECRET = "demo-test-session-secret-11";
+/** Свой арендатор у каждого тестового файла: счётчики не мешают друг другу. */
+const TENANT_SLUG = "demo-tenant-limits-11";
 
 describe("лимиты запросов, диалогов и бюджета", () => {
   beforeAll(async () => {
-    await ensureDatabase();
+    await ensureDatabase(TENANT_SLUG);
   });
 
   beforeEach(async () => {

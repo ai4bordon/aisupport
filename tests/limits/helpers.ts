@@ -17,9 +17,6 @@ export const TEST_DATABASE_URL =
 const MIGRATIONS_DIR = resolve(process.cwd(), "db/migrations");
 const ADVISORY_LOCK_KEY = 728_111_002;
 
-/** Слаг арендатора, под которым счётчики живут в тестах среза. */
-export const TEST_TENANT_SLUG = "demo-tenant";
-
 /**
  * Таблица `tenants` принадлежит ядру (миграция 110). Пока ядро не слито в
  * `main`, её нет в рабочем дереве среза, а счётчики без арендатора работать
@@ -68,11 +65,14 @@ async function readMigrationFiles(): Promise<Array<{ name: string; up: string }>
 
 /**
  * Готовит базу среза: применяет миграции среза, создаёт таблицу арендатора
- * (если ядро ещё не слито) и заводит демо-арендатора.
+ * (если ядро ещё не слито) и заводит арендатора теста.
+ *
+ * У каждого тестового файла свой арендатор, поэтому файлы, идущие параллельно,
+ * не выжигают квоту друг друга: счётчики разнесены по `tenant_id`.
  */
-export async function ensureDatabase(): Promise<void> {
+export async function ensureDatabase(tenantSlug: string): Promise<void> {
   process.env.DATABASE_URL = TEST_DATABASE_URL;
-  process.env.TENANT_SLUG = TEST_TENANT_SLUG;
+  process.env.TENANT_SLUG = tenantSlug;
 
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
@@ -116,12 +116,11 @@ export async function ensureDatabase(): Promise<void> {
         }
       }
 
-      await client.query(TENANTS_DDL);
       await client.query(
         `INSERT INTO tenants (slug, name, shadow_mode)
          VALUES ($1, $2, false)
          ON CONFLICT (slug) DO NOTHING`,
-        [TEST_TENANT_SLUG, "Демо-тенант среза 11"],
+        [tenantSlug, `Демо-тенант среза 11: ${tenantSlug}`],
       );
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [ADVISORY_LOCK_KEY]);
@@ -131,12 +130,22 @@ export async function ensureDatabase(): Promise<void> {
   }
 }
 
-/** Полная очистка счётчиков стенда между тестами. */
+/**
+ * Очистка счётчиков текущего арендатора между тестами.
+ *
+ * Чужие строки не трогаются: параллельные тестовые файлы используют разных
+ * арендаторов и не мешают друг другу.
+ */
 export async function resetCounters(): Promise<void> {
+  const slug = process.env.TENANT_SLUG;
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
   try {
-    await client.query("TRUNCATE TABLE usage_counters");
+    await client.query(
+      `DELETE FROM usage_counters
+        WHERE tenant_id = (SELECT id FROM tenants WHERE slug = $1)`,
+      [slug],
+    );
   } finally {
     await client.end();
   }

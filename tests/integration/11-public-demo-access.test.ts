@@ -22,6 +22,8 @@ import { ensureDatabase, resetCounters } from "../limits/helpers";
 const TEST_CODE = "demo-test-code-11";
 const TEST_SECRET = "demo-test-session-secret-11";
 const COOKIE_NAME = "support_access";
+/** Свой арендатор у каждого тестового файла: счётчики не мешают друг другу. */
+const TENANT_SLUG = "demo-tenant-integration-11";
 
 function postCode(code: unknown): Promise<Response> {
   return POST(
@@ -41,7 +43,7 @@ function cookieValue(setCookie: string): string {
 
 describe("11 — защита публичного демонстрационного стенда", () => {
   beforeAll(async () => {
-    await ensureDatabase();
+    await ensureDatabase(TENANT_SLUG);
   });
 
   beforeEach(async () => {
