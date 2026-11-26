@@ -66,7 +66,19 @@ async function tableExists(client: pg.Client, table: string): Promise<boolean> {
  */
 export async function ensureSchema(): Promise<void> {
   await withClient(async (client) => {
-    await client.query(`
+    // Тестовые файлы идут параллельно, а схему поднимает один процесс:
+    // блокировка сериализует применение миграций.
+    await client.query("SELECT pg_advisory_lock(hashtext('catalog-slice-schema'))");
+    try {
+      await ensureSchemaUnlocked(client);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext('catalog-slice-schema'))");
+    }
+  });
+}
+
+async function ensureSchemaUnlocked(client: pg.Client): Promise<void> {
+  await client.query(`
       CREATE TABLE IF NOT EXISTS pgmigrations (
         id SERIAL PRIMARY KEY,
         name varchar(255) NOT NULL,
@@ -74,20 +86,20 @@ export async function ensureSchema(): Promise<void> {
       )
     `);
 
-    const applied = new Set(
-      (await client.query("SELECT name FROM pgmigrations")).rows.map((row: { name: string }) => row.name),
-    );
-    const migrationsDir = join(repoRoot, "db", "migrations");
-    const files = (await readdir(migrationsDir))
-      .filter((name) => name.endsWith(".sql"))
-      .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-    const pending = files.filter((name) => !applied.has(name));
+  const applied = new Set(
+    (await client.query("SELECT name FROM pgmigrations")).rows.map((row: { name: string }) => row.name),
+  );
+  const migrationsDir = join(repoRoot, "db", "migrations");
+  const files = (await readdir(migrationsDir))
+    .filter((name) => name.endsWith(".sql"))
+    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  const pending = files.filter((name) => !applied.has(name));
 
-    // Таблица `tenants` нужна миграциям каталога как внешний ключ. Пока
-    // миграция ядра не слита, создаём заглушку; после слияния создаст ядро.
-    const coreWillCreateTenants = pending.some((name) => name.startsWith("110_"));
-    if (!coreWillCreateTenants && !(await tableExists(client, "tenants"))) {
-      await client.query(`
+  // Таблица `tenants` нужна миграциям каталога как внешний ключ. Пока
+  // миграция ядра не слита, создаём заглушку; после слияния создаст ядро.
+  const coreWillCreateTenants = pending.some((name) => name.startsWith("110_"));
+  if (!coreWillCreateTenants && !(await tableExists(client, "tenants"))) {
+    await client.query(`
         CREATE TABLE IF NOT EXISTS tenants (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           slug text NOT NULL UNIQUE,
@@ -96,21 +108,20 @@ export async function ensureSchema(): Promise<void> {
           created_at timestamptz NOT NULL DEFAULT now()
         )
       `);
-    }
+  }
 
-    for (const name of pending) {
-      const { up } = splitMigration(await readFile(join(migrationsDir, name), "utf8"));
-      await client.query("BEGIN");
-      try {
-        await client.query(up);
-        await client.query("INSERT INTO pgmigrations (name, run_on) VALUES ($1, now())", [name]);
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw new Error(`миграция ${name} не применилась: ${(error as Error).message}`);
-      }
+  for (const name of pending) {
+    const { up } = splitMigration(await readFile(join(migrationsDir, name), "utf8"));
+    await client.query("BEGIN");
+    try {
+      await client.query(up);
+      await client.query("INSERT INTO pgmigrations (name, run_on) VALUES ($1, now())", [name]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw new Error(`миграция ${name} не применилась: ${(error as Error).message}`);
     }
-  });
+  }
 }
 
 export async function createTenant(slug: string): Promise<string> {
