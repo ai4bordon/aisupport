@@ -18,6 +18,7 @@ const CHANNEL_SCOPE = "";
 
 export type PoolLike = {
   query: (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+  end: () => Promise<void>;
 };
 
 export type ChannelStateStoreOptions = {
@@ -83,5 +84,14 @@ export function createStatePool(): PoolLike {
   }
   // `pg` подключается лениво: пул создаётся, но соединение не открывается,
   // пока не понадобится запрос.
-  return new Pool({ connectionString }) as unknown as PoolLike;
+  const pool = new Pool({ connectionString });
+  return {
+    query: async (text: string, values: unknown[] = []) => {
+      const result = await pool.query(text, values);
+      return { rows: result.rows as Record<string, unknown>[] };
+    },
+    end: async () => {
+      await pool.end();
+    },
+  };
 }

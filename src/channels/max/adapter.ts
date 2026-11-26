@@ -94,8 +94,8 @@ export type MaxSession = {
   seen: Set<string>;
   /** Время последних отправок по каждому чату — предел 2/с. */
   lastSentAt: Map<string, number[]>;
-  /** Очередь отправки: отправки в пределах чата идут по порядку. */
-  sendChain: Promise<void>;
+  /** Очередь отправки по каждому диалогу: ответы чата идут по порядку. */
+  sendChains: Map<string, Promise<void>>;
   /** Идёт ли опрос. */
   running: boolean;
   /** Текст в журнал без токена бота. */
@@ -154,7 +154,7 @@ export async function createMaxSession(options: MaxAdapterOptions): Promise<MaxS
     lastEventAt: stored?.lastEventAt ?? null,
     seen: new Set<string>(),
     lastSentAt: new Map<string, number[]>(),
-    sendChain: Promise.resolve(),
+    sendChains: new Map<string, Promise<void>>(),
     running: false,
     log: (message: string) => redactToken(message, options.token),
   };
@@ -163,21 +163,22 @@ export async function createMaxSession(options: MaxAdapterOptions): Promise<MaxS
 /**
  * Обрабатывает одно событие MAX.
  *
- * Возвращает `true`, если событие дало обращение к ядру.
+ * Возвращает идентификатор сообщения, дошедшего до ядра, или `null`, если
+ * событие отброшено: пустое, неподходящее или повторное.
  */
 export async function handleMaxUpdate(
   current: MaxSession,
   update: MaxUpdate,
-): Promise<boolean> {
+): Promise<string | null> {
   const message = normalizeMaxUpdate(update, { mask: current.options.mask });
   if (!message) {
     // Пустое или неподходящее событие отбрасывается и не роняет опрос.
-    return false;
+    return null;
   }
 
   if (current.seen.has(message.messageId)) {
     // Повторное событие не создаёт второе обращение и второй ответ.
-    return false;
+    return null;
   }
   remember(current.seen, message.messageId);
 
@@ -189,7 +190,7 @@ export async function handleMaxUpdate(
         `MAX: результат escalate для сообщения ${message.messageId} — отправка в MAX не выполняется`,
       ),
     );
-    return true;
+    return message.messageId;
   }
 
   if (await current.options.shadowMode()) {
@@ -198,12 +199,12 @@ export async function handleMaxUpdate(
         `MAX: режим тени — ответ для сообщения ${message.messageId} не отправлен`,
       ),
     );
-    return true;
+    return message.messageId;
   }
 
   const chatId = message.externalChatId;
   if (!chatId) {
-    return true;
+    return message.messageId;
   }
 
   let text = outcome.answer.text;
@@ -215,7 +216,7 @@ export async function handleMaxUpdate(
   current.logger.info(
     current.log(`MAX: ответ отправлен в чат ${chatId} для сообщения ${message.messageId}`),
   );
-  return true;
+  return message.messageId;
 }
 
 /**
@@ -229,16 +230,20 @@ export async function handleMaxUpdates(
 ): Promise<string[]> {
   const handled: string[] = [];
   for (const update of updates) {
-    if (await handleMaxUpdate(current, update)) {
-      const message = normalizeMaxUpdate(update, { mask: current.options.mask });
-      if (message) {
-        handled.push(message.messageId);
-      }
+    const messageId = await handleMaxUpdate(current, update);
+    if (messageId) {
+      handled.push(messageId);
     }
   }
   return handled;
 }
 
+/**
+ * Отправка с учётом предела 2 сообщения в секунду на диалог.
+ *
+ * Очередь отправки своя у каждого диалога: пауза одного чата не задерживает
+ * ответы других чатов.
+ */
 async function sendWithRateLimit(
   current: MaxSession,
   chatId: string,
@@ -249,9 +254,8 @@ async function sendWithRateLimit(
     : (id: string, body: string) => current.client.sendMessage(id, body);
 
   const run = async () => {
-    const now = current.clock.now();
     const sentAt = current.lastSentAt.get(chatId) ?? [];
-    const delay = rateLimitDelay(sentAt, now);
+    const delay = rateLimitDelay(sentAt, current.clock.now());
     if (delay > 0) {
       await current.clock.sleep(delay);
     }
@@ -265,8 +269,12 @@ async function sendWithRateLimit(
     await send(chatId, text);
   };
 
-  const next = current.sendChain.then(run, run);
-  current.sendChain = next.catch(() => undefined);
+  const previous = current.sendChains.get(chatId) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  current.sendChains.set(
+    chatId,
+    next.catch(() => undefined),
+  );
   await next;
 }
 
@@ -300,7 +308,7 @@ export async function stopMaxAdapter(): Promise<void> {
     return;
   }
   session.running = false;
-  await session.sendChain.catch(() => undefined);
+  await Promise.all([...session.sendChains.values()].map((chain) => chain.catch(() => undefined)));
   session = null;
 }
 

@@ -118,7 +118,7 @@ describe("MAX-канал: обработка события", () => {
 
     const handled = await handleMaxUpdate(session, update("mid-2", 4242));
 
-    expect(handled).toBe(true);
+    expect(handled).toBe("mid-2");
     expect(agentCalls).toBe(1);
     expect(client.sent).toHaveLength(0);
   });
@@ -247,13 +247,17 @@ describe("MAX-канал: лимит отправки", () => {
       update("m1", 111),
       update("m2", 111),
       update("m3", 222),
+      update("m4", 222),
+      update("m5", 111),
     ]);
 
-    const first = sendTimes.find((item) => item.chatId === "111" && item.at === 0);
-    const other = sendTimes.find((item) => item.chatId === "222");
-    expect(first).toBeDefined();
-    // Второй диалог не ждёт лимита первого.
-    expect(other?.at).toBe(0);
+    // Первый диалог: два сообщения сразу, третье ждёт конца окна.
+    const first = sendTimes.filter((item) => item.chatId === "111");
+    expect(first.map((item) => item.at)).toEqual([0, 0, 1000]);
+
+    // Второй диалог не ждёт паузы первого: своя очередь отправки.
+    const second = sendTimes.filter((item) => item.chatId === "222");
+    expect(second.map((item) => item.at)).toEqual([0, 0]);
   });
 });
 
@@ -310,6 +314,9 @@ function stubPool(rows: Row[] = []): PoolLike & { saved: Array<{ text: string; v
       }
       saved.push({ text, values });
       return { rows: [] };
+    },
+    async end() {
+      // Пулу-заглушке нечего закрывать.
     },
   };
 }
