@@ -255,6 +255,90 @@ async function writeState(statePath: string | null, state: ImportState): Promise
   await writeFile(target, JSON.stringify(state), "utf8");
 }
 
+export type InspectReport = {
+  total: number;
+  categories: number;
+  availableCount: number;
+  pricedCount: number;
+  paramNames: number;
+  paramValues: number;
+  skipped: number;
+  failed: number;
+  feedDate: string | null;
+  snapshotHash: string;
+  sourceKind: SourceKind;
+  sourceUrl: string | null;
+  durationMs: number;
+};
+
+/**
+ * Разбирает фид, ничего не записывая в базу: проверка источника и счётчики.
+ * Нужен, чтобы увидеть, что живой фид читается, до тяжёлой записи в базу.
+ */
+export async function inspectFeed(
+  source: string,
+  fallbackPath: string | null = null,
+): Promise<InspectReport> {
+  const startedAt = Date.now();
+  const feedSource = await openFeedSource({
+    sourceUrl: isRemote(source) ? source : null,
+    fallbackPath: isRemote(source) ? fallbackPath : source,
+  });
+
+  const paramNames = new Set<string>();
+  let paramValues = 0;
+  let total = 0;
+  let categories = 0;
+  let availableCount = 0;
+  let pricedCount = 0;
+  let skipped = 0;
+  let failed = 0;
+  let feedDate: string | null = null;
+
+  for await (const record of parseFeed(feedSource.stream)) {
+    if (record.kind === "meta") {
+      feedDate = feedDateToIsoUtc(record.feedDate);
+      continue;
+    }
+    if (record.kind === "category") {
+      categories += 1;
+      continue;
+    }
+    const offer = record.offer;
+    total += 1;
+    if (offer.id === "") {
+      skipped += 1;
+      continue;
+    }
+    if (offer.name.trim() === "") {
+      failed += 1;
+      continue;
+    }
+    for (const name of Object.keys(offer.params)) paramNames.add(name);
+    for (const value of Object.values(offer.params)) {
+      paramValues += Array.isArray(value) ? value.length : 1;
+    }
+    if (offer.available) availableCount += 1;
+    if (offer.price > 0) pricedCount += 1;
+  }
+
+  return {
+    total,
+    categories,
+    availableCount,
+    pricedCount,
+    paramNames: paramNames.size,
+    paramValues,
+    skipped,
+    failed,
+    feedDate,
+    snapshotHash: feedSource.snapshotHash,
+    sourceKind: feedSource.sourceKind,
+    sourceUrl: feedSource.sourceUrl,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
 /**
  * Импортирует фид в каталог.
  *

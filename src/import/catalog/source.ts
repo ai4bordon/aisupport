@@ -64,8 +64,6 @@ async function readWithHead(
     headLength += value.length;
   }
   const head = Buffer.concat(chunks).subarray(0, 2);
-  const rest = chunks.length > 0 ? chunks[chunks.length - 1] : undefined;
-  void rest;
 
   async function* replay(): AsyncGenerator<Uint8Array> {
     for (const chunk of chunks) yield chunk;
