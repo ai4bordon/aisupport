@@ -13,9 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "db:migrate:up": "node-pg-migrate -m db/migrations -d $DATABASE_URL up",
-    "db:migrate:down": "node-pg-migrate -m db/migrations -d $DATABASE_URL down",
-    "db:migrate:status": "node-pg-migrate -m db/migrations -d $DATABASE_URL status",
+    "db:migrate:up": "node scripts/migrate.mjs up",
+    "db:migrate:down": "node scripts/migrate.mjs down",
+    "db:migrate:status": "node scripts/migrate.mjs status",
     "db:seed": "tsx db/seed.ts",
     "import:feed": "tsx scripts/import-feed.ts",
     "import:docs": "tsx scripts/import-docs.ts"
