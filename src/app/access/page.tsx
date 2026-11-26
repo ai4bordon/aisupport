@@ -1,10 +1,13 @@
 import Image from "next/image";
 import logo from "./softline-logo.png";
+import icon from "./icon.png";
 import "./styles.css";
 
 export const metadata = {
   title: "Доступ к демонстрационному стенду — Софтлайн Решения",
   description: "Страница ввода кода доступа к демонстрационному стенду ИИ-агента поддержки.",
+  // Favicon — утверждённый вариант логотипа «Софтлайн Решения + SOFL» (R26).
+  icons: { icon },
 };
 
 export default function AccessPage() {

@@ -172,4 +172,51 @@ describe("код доступа и подписанная cookie", () => {
     expect(container.querySelector("img")).not.toBeNull();
     expect(String(metadata.title)).toContain("Софтлайн");
   });
+
+  it("заголовок страницы и favicon оформлены по R26", () => {
+    expect(String(metadata.title)).toContain("Софтлайн Решения");
+    expect(metadata.icons).toBeDefined();
+    expect(metadata.icons?.icon).toBeDefined();
+  });
+
+  it("использует web-палитру и стек шрифтов из общих токенов", async () => {
+    const tokens = await readFile(
+      resolve(process.cwd(), "src/app/styles/tokens.css"),
+      "utf8",
+    );
+
+    // Проверяются вычисленные значения переменных, а не только их наличие.
+    expect(tokens).toMatch(/--sl-accent:\s*#a50f2d/i);
+    expect(tokens).toMatch(/--sl-accent-hover:\s*#d20b33/i);
+    expect(tokens).toMatch(/--sl-bg:\s*#f0f2f6/i);
+    expect(tokens).toMatch(/--sl-text:\s*#212424/i);
+    expect(tokens).toMatch(/--sl-text-secondary:\s*#40454e/i);
+    expect(tokens).toMatch(/--sl-divider:\s*#d2dce5/i);
+    expect(tokens).toMatch(/--sl-font-sans:\s*"Montserrat",\s*"Segoe UI"/i);
+  });
+
+  it("держит охранное поле логотипа не меньше его высоты", async () => {
+    const css = await readFile(
+      resolve(process.cwd(), "src/app/access/styles.css"),
+      "utf8",
+    );
+
+    const logoHeight = /--sl-access-logo-height:\s*(\d+)px/.exec(css)?.[1];
+    expect(logoHeight).toBeDefined();
+
+    const guard = /max\(var\(--sl-logo-guard\),\s*var\(--sl-access-logo-height\)\)/.test(css);
+    expect(guard).toBe(true);
+
+    // Охранное поле общего токена — 24 px; логотип на странице выше.
+    const tokens = await readFile(
+      resolve(process.cwd(), "src/app/styles/tokens.css"),
+      "utf8",
+    );
+    const tokenGuard = Number.parseInt(
+      /--sl-logo-guard:\s*(\d+)px/.exec(tokens)?.[1] ?? "0",
+      10,
+    );
+    expect(tokenGuard).toBeGreaterThan(0);
+    expect(Number.parseInt(logoHeight as string, 10)).toBeGreaterThanOrEqual(tokenGuard);
+  });
 });
