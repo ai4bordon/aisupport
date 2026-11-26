@@ -1,0 +1,38 @@
+/* Фирменные токены Softline — общая поверхность, владелец: exec.
+   Срезы читают переменные; свои hex не заводят.
+   Источник: docs/лого софтлайн/Softline Guideline 2025 (1).pdf, R26, ADR-0012. */
+
+:root {
+  /* Web-палитра UI-kit */
+  --sl-accent: #a50f2d;
+  --sl-accent-hover: #d20b33;
+  --sl-bg: #f0f2f6;
+  --sl-text: #212424;
+  --sl-text-secondary: #40454e;
+  --sl-text-muted: #aab8c3;
+  --sl-divider: #d2dce5;
+  --sl-footer: #697279;
+  --sl-surface: #ffffff;
+  --sl-card: #282b2b;
+
+  /* Печатная палитра для документов */
+  --sl-print-bordeaux: #a20c33;
+  --sl-print-gray: #a6a8ab;
+  --sl-print-blue: #2396d3;
+  --sl-print-graphite: #686968;
+
+  /* Шрифты: Segoe UI только как системный fallback, в web не встраивается */
+  --sl-font-sans: "Montserrat", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sl-font-size-body: 11pt;
+
+  /* Отступы и радиусы */
+  --sl-space-1: 4px;
+  --sl-space-2: 8px;
+  --sl-space-3: 16px;
+  --sl-space-4: 24px;
+  --sl-space-5: 32px;
+  --sl-radius: 8px;
+
+  /* Охранное поле логотипа: не меньше высоты самого логотипа */
+  --sl-logo-guard: 24px;
+}
