@@ -17,9 +17,7 @@ export default defineConfig({
     // На машине 4 vCPU: ограничиваем число процессов, чтобы шесть агентов
     // не запускали тесты одновременно и не выели память.
     pool: "forks",
-    poolOptions: {
-      forks: { maxForks: 2 },
-    },
+    maxForks: 2,
     testTimeout: 20000,
     hookTimeout: 20000,
   },
