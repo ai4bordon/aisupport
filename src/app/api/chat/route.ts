@@ -1,0 +1,405 @@
+import { randomUUID } from "node:crypto";
+import type { Pool } from "pg";
+import { ChatRequestSchema } from "@/contracts/chat";
+import { getPool } from "@/db/pool";
+import { getTenantId } from "@/db/tenant";
+import { maskPersonalData, restoreMaskedData } from "@/core/mask";
+import { runAgent } from "@/core/run";
+import { buildSetCookie, readConversationId } from "@/core/session";
+import { validateAnswer } from "@/core/validate";
+
+/**
+ * POST /v1/chat — веб-чат (docs/api-contract.md §4).
+ *
+ * Порядок: cookie → сверка conversation_id → маскирование → ядро →
+ * восстановление меток → запись в базу → ответ по контракту.
+ *
+ * Идентификация по IP не используется: диалог определяется только
+ * подписанной cookie.
+ */
+
+function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  requestId: string,
+): Response {
+  return Response.json(
+    { error: { code, message, details: {}, request_id: requestId } },
+    { status },
+  );
+}
+
+export async function POST(request: Request): Promise<Response> {
+  const requestId = request.headers.get("x-request-id") ?? randomUUID();
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return errorResponse(
+      400,
+      "validation_error",
+      "Тело запроса не разобрано",
+      requestId,
+    );
+  }
+
+  const parsed = ChatRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    return errorResponse(
+      400,
+      "validation_error",
+      "Тело запроса не прошло схему",
+      requestId,
+    );
+  }
+  const body = parsed.data;
+
+  // Диалог определяется подписанной cookie; тело только сверяется с ней.
+  const cookieConversation = readConversationId(request.headers.get("cookie") ?? undefined);
+  if (cookieConversation && cookieConversation.id !== body.conversation_id) {
+    return errorResponse(
+      403,
+      "forbidden",
+      "conversation_id не совпадает с подписанной cookie",
+      requestId,
+    );
+  }
+
+  const conversationId = cookieConversation?.id ?? body.conversation_id;
+  const isNewConversation = cookieConversation === null;
+
+  let tenantId: string;
+  try {
+    tenantId = await getTenantId();
+  } catch {
+    return errorResponse(
+      503,
+      "upstream_unavailable",
+      "База данных недоступна",
+      requestId,
+    );
+  }
+
+  const pool = getPool();
+
+  // Идемпотентность: повтор client_message_id не создаёт второе обращение.
+  const existing = await pool.query<{ id: string }>(
+    "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2 AND role = 'client'",
+    [tenantId, body.message.client_message_id],
+  );
+  const existingMessage = existing.rows[0];
+
+  if (existingMessage) {
+    const previous = await pool.query<{
+      id: string;
+      outcome: string;
+      text_masked: string;
+      sources: unknown;
+    }>(
+      `SELECT m.id, m.text_masked, m.sources,
+              COALESCE((SELECT s.outcome FROM agent_steps s
+                        WHERE s.conversation_id = m.conversation_id
+                          AND s.outcome IS NOT NULL
+                        ORDER BY s.created_at DESC LIMIT 1), 'respond') AS outcome
+       FROM messages m
+       WHERE m.conversation_id = $1 AND m.role = 'agent'
+       ORDER BY m.created_at DESC LIMIT 1`,
+      [conversationId],
+    );
+    const previousRow = previous.rows[0];
+    const outcome = previousRow?.outcome ?? "respond";
+
+    const headers: Record<string, string> = {};
+    if (isNewConversation) headers["Set-Cookie"] = buildSetCookie(conversationId);
+
+    if (outcome === "escalate") {
+      const escalation = await pool.query<{
+        id: string;
+        reason: string;
+        summary: string;
+        draft: string | null;
+      }>(
+        `SELECT id, reason, summary, draft FROM escalations
+         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [conversationId],
+      );
+      const row = escalation.rows[0];
+      return Response.json(
+        {
+          conversation_id: conversationId,
+          message_id: previousRow?.id ?? existingMessage.id,
+          outcome: "escalate",
+          answer: null,
+          escalation: row
+            ? {
+                id: row.id,
+                reason: row.reason,
+                summary: row.summary,
+                draft: row.draft,
+              }
+            : null,
+          trace: { steps: 0, tokens: 0, cost_rub: 0 },
+        },
+        { headers },
+      );
+    }
+
+    return Response.json(
+      {
+        conversation_id: conversationId,
+        message_id: previousRow?.id ?? existingMessage.id,
+        outcome: "respond",
+        answer: {
+          text: previousRow?.text_masked ?? "",
+          sources: (previousRow?.sources as unknown[]) ?? [],
+        },
+        escalation: null,
+        trace: { steps: 0, tokens: 0, cost_rub: 0 },
+      },
+      { headers },
+    );
+  }
+
+  // Маскирование до вызова модели: в модель уходят только метки.
+  const maskScope = await loadMaskScope(pool, tenantId, conversationId);
+  const masked = maskPersonalData(body.message.text, { mapping: maskScope.mapping });
+
+  const claimed = await claimConversation(pool, tenantId, conversationId);
+  if (!claimed) {
+    return errorResponse(
+      403,
+      "forbidden",
+      "Диалог принадлежит другому арендатору",
+      requestId,
+    );
+  }
+
+  await pool.query(
+    `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+     VALUES ($1, $2, $3, 'client', $4, $5, '[]'::jsonb)
+     ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
+    [tenantId, conversationId, body.message.client_message_id, masked.maskedText, body.message.text],
+  );
+
+  const outcome = await runAgent({
+    conversationId,
+    messageId: body.message.client_message_id,
+    channel: "web",
+    externalChatId: null,
+    text: masked.maskedText,
+    maskedFieldsCount: masked.maskedFieldsCount,
+    tenantId,
+  });
+
+  const headers: Record<string, string> = {};
+  if (isNewConversation) headers["Set-Cookie"] = buildSetCookie(conversationId);
+
+  // Ответ, не прошедший проверку, клиенту не отправляется: 422, а не 200
+  // с эскалацией — контракт §2 относит непройденную проверку к 422.
+  if (outcome.outcome === "escalate" && outcome.escalation.reason === "validation_failed") {
+    await recordEscalation(pool, tenantId, conversationId, {
+      reason: "validation_failed",
+      summary: outcome.escalation.summary,
+      draft: outcome.escalation.draft,
+      sources: [],
+    });
+    return errorResponse(
+      422,
+      "approval_required",
+      "Ответ не прошёл проверку и не отправлен клиенту",
+      requestId,
+    );
+  }
+
+  // Ответ, не прошедший проверку на сырые ПД, клиенту не отправляется.
+  if (outcome.outcome === "respond") {
+    const restored = restoreMaskedData(outcome.answer.text, masked.mapping);
+    const restoredSources = outcome.answer.sources;
+
+    // Проверяется именно восстановленный текст: модель вернула метки, но
+    // после восстановления в ответе не должно оказаться сырых данных.
+    // Значения, восстановленные по таблице соответствий, утечкой не
+    // считаются: клиент законно получает свои же данные обратно.
+    const outgoing = validateAnswer(
+      { text: restored, amounts: [], citations: [] },
+      restoredSources,
+      Object.values(masked.mapping),
+    );
+    if (!outgoing.valid) {
+      await recordEscalation(pool, tenantId, conversationId, {
+        reason: "validation_failed",
+        summary: "Ответ не прошёл проверку на персональные данные — передаём менеджеру.",
+        draft: null,
+        sources: restoredSources,
+      });
+      return errorResponse(
+        422,
+        "approval_required",
+        "Ответ не прошёл проверку и не отправлен клиенту",
+        requestId,
+      );
+    }
+
+    const agentMessage = await pool.query<{ id: string }>(
+      `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+       VALUES ($1, $2, $3, 'agent', $4, $5, $6::jsonb)
+       RETURNING id`,
+      [
+        tenantId,
+        conversationId,
+        randomUUID(),
+        outcome.answer.text,
+        restored,
+        JSON.stringify(
+          restoredSources.map((source) => ({
+            kind: source.kind,
+            id: source.id,
+            title: source.title,
+            location: source.location,
+          })),
+        ),
+      ],
+    );
+
+    const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
+    const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
+
+    return Response.json(
+      {
+        conversation_id: conversationId,
+        message_id: agentMessage.rows[0]?.id ?? body.message.client_message_id,
+        outcome: "respond",
+        answer: {
+          text: restored,
+          sources: restoredSources.map((source) => ({
+            kind: source.kind,
+            id: source.id,
+            title: source.title,
+            location: source.location,
+          })),
+        },
+        escalation: null,
+        trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
+      },
+      { headers },
+    );
+  }
+
+  const escalationId = await recordEscalation(pool, tenantId, conversationId, {
+    reason: outcome.escalation.reason,
+    summary: outcome.escalation.summary,
+    draft: outcome.escalation.draft,
+    sources: [],
+  });
+
+  const agentMessage = await pool.query<{ id: string }>(
+    `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+     VALUES ($1, $2, $3, 'agent', $4, $4, '[]'::jsonb)
+     RETURNING id`,
+    [
+      tenantId,
+      conversationId,
+      randomUUID(),
+      outcome.escalation.draft ?? outcome.escalation.summary,
+    ],
+  );
+
+  const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
+  const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
+
+  return Response.json(
+    {
+      conversation_id: conversationId,
+      message_id: agentMessage.rows[0]?.id ?? body.message.client_message_id,
+      outcome: "escalate",
+      answer: null,
+      escalation: {
+        id: escalationId,
+        reason: outcome.escalation.reason,
+        summary: outcome.escalation.summary,
+        draft: outcome.escalation.draft,
+      },
+      trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
+    },
+    { headers },
+  );
+}
+
+/** Таблица соответствий меток диалога: хранится только на сервере. */
+async function loadMaskScope(
+  pool: Pool,
+  tenantId: string,
+  conversationId: string,
+): Promise<{ mapping: Record<string, string> }> {
+  const result = await pool.query<{ text_masked: string }>(
+    "SELECT text_masked FROM messages WHERE tenant_id = $1 AND conversation_id = $2",
+    [tenantId, conversationId],
+  );
+  const mapping: Record<string, string> = {};
+  for (const row of result.rows) {
+    for (const match of row.text_masked.matchAll(/⟦([A-Z]+_\d+)⟧/g)) {
+      const label = `⟦${match[1]}⟧`;
+      if (!(label in mapping)) mapping[label] = label;
+    }
+  }
+  return { mapping };
+}
+
+/**
+ * Создание диалога, если его ещё нет.
+ *
+ * Идентификатор диалога приходит из тела запроса, поэтому перед
+ * использованием проверяется принадлежность арендатору: чужой диалог
+ * использовать нельзя (docs/data-model.md §5, R15). Возвращается `false`,
+ * если диалог принадлежит другому арендатору.
+ */
+async function claimConversation(
+  pool: Pool,
+  tenantId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const existing = await pool.query<{ tenant_id: string }>(
+    "SELECT tenant_id FROM conversations WHERE id = $1",
+    [conversationId],
+  );
+  const found = existing.rows[0];
+  if (found) return found.tenant_id === tenantId;
+
+  await pool.query(
+    `INSERT INTO conversations (id, tenant_id, channel, status)
+     VALUES ($1, $2, 'web', 'open')
+     ON CONFLICT (id) DO NOTHING`,
+    [conversationId, tenantId],
+  );
+  return true;
+}
+
+/** Запись эскалации в очередь менеджера. */
+async function recordEscalation(
+  pool: Pool,
+  tenantId: string,
+  conversationId: string,
+  escalation: {
+    reason: string;
+    summary: string;
+    draft: string | null;
+    sources: unknown[];
+  },
+): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO escalations (tenant_id, conversation_id, reason, summary, draft, sources, status)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'open')
+     RETURNING id`,
+    [
+      tenantId,
+      conversationId,
+      escalation.reason,
+      escalation.summary,
+      escalation.draft,
+      JSON.stringify(escalation.sources),
+    ],
+  );
+  return result.rows[0]?.id ?? randomUUID();
+}
