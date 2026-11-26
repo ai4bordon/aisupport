@@ -480,20 +480,37 @@ describe("маршрут статуса канала MAX", () => {
  * Проверка на живой базе: миграция `5000_channel_state` создаёт таблицу,
  * а маркер опроса переживает перезапуск адаптера.
  *
+ * Тест самодостаточен: он создаёт собственного арендатора с уникальным
+ * slug и удаляет его в `finally`, поэтому проходит на пустой базе с
+ * применёнными миграциями и не зависит от данных других прогонов.
+ *
  * Тест выполняется, только если задан `DATABASE_URL` — иначе он пропускается.
  */
 const databaseUrl = process.env.DATABASE_URL;
 
+/** Уникальный суффикс slug, чтобы параллельные прогоны не сталкивались. */
+function uniqueSuffix(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 describe.skipIf(!databaseUrl)("интеграция MAX-канала с базой", () => {
   it("сохраняет маркер опроса в channel_state и читает его обратно", async () => {
     const pool = createStatePool();
+    const slug = `max-test-${uniqueSuffix()}`;
+    let tenantId: string | null = null;
+
     try {
-      const tenantResult = await pool.query(
-        "SELECT id FROM tenants WHERE slug = 'demo-tenant' LIMIT 1",
+      // Арендатор создаётся до обращения к channel_state: таблица ссылается
+      // на tenants, поэтому без арендатора строку состояния не записать.
+      const created = await pool.query(
+        `INSERT INTO tenants (slug, name) VALUES ($1, $2)
+         ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+         RETURNING id`,
+        [slug, slug],
       );
-      const tenantRow = tenantResult.rows[0] as { id?: string } | undefined;
+      const tenantRow = created.rows[0] as { id?: string } | undefined;
       expect(tenantRow?.id).toBeTruthy();
-      const tenantId = String(tenantRow?.id);
+      tenantId = String(tenantRow?.id);
 
       const store = createChannelStateStore(pool, { tenantId });
 
@@ -507,12 +524,13 @@ describe.skipIf(!databaseUrl)("интеграция MAX-канала с базо
       expect(state.marker).toBe(4242);
       expect(state.lastEventAt).toBe("2026-11-27T10:00:00.000Z");
       expect(state.shadowMode).toBe(false);
-
-      await pool.query(
-        "DELETE FROM channel_state WHERE tenant_id = $1 AND channel = 'max'",
-        [tenantId],
-      );
     } finally {
+      // Удаление выполняется и при падении теста, иначе следующий прогон
+      // упрётся в остатки предыдущего.
+      if (tenantId) {
+        await pool.query("DELETE FROM channel_state WHERE tenant_id = $1", [tenantId]);
+      }
+      await pool.query("DELETE FROM tenants WHERE slug = $1", [slug]);
       await pool.end();
     }
   });
