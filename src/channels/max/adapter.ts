@@ -1,5 +1,6 @@
 import { createMaxClient, redactToken, type MaxClient } from "./client";
 import { normalizeMaxUpdate } from "./normalize";
+import type { MessageRecordPort } from "./messages";
 import type {
   AgentOutcome,
   MaskPort,
@@ -98,6 +99,24 @@ export type MaxAdapterOptions = {
    * Ответ, не прошедший проверку, клиенту не отправляется.
    */
   checkOutgoing?: OutgoingCheckPort;
+  /**
+   * Порт записи сообщения в переписку (`messages`).
+   *
+   * Канал MAX писал только трассу, из-за чего лента канала на экране демо,
+   * история диалога в кабинете менеджера и идемпотентная ветка веб-чаты
+   * показывали пустоту при живом общении. Порт пишет обе стороны: реплику
+   * клиента и ответ агента.
+   *
+   * Без порта переписка не пишется — поведение прежнее, а не сломанное.
+   */
+  recordMessage?: MessageRecordPort;
+  /**
+   * Арендатор для записи сообщений.
+   *
+   * Канал не определяет арендатора сам: сервер его выбирает, и в MAX
+   * арендатор один (ADR-0016). Порт получает его при подключении.
+   */
+  tenantId?: string;
   /** Состояние канала между перезапусками (маркер, последнее событие). */
   state?: MaxChannelStateStore;
   logger?: MaxLogger;
@@ -216,6 +235,19 @@ export async function handleMaxUpdate(
   // менять её исход (docs/plans/06-shadow-mode.md, шаг 4).
   const shadowMode = await current.options.shadowMode();
 
+  // Реплика клиента пишется в переписку до вызова ядра: даже если ядро
+  // упадёт, вопрос клиента останется в истории диалога.
+  const tenantId = current.options.tenantId;
+  if (tenantId !== undefined) {
+    await current.options.recordMessage?.({
+      tenantId,
+      conversationId: message.conversationId,
+      messageId: message.messageId,
+      role: "client",
+      text: message.text,
+    });
+  }
+
   const outcome = await current.options.runAgent(message);
 
   if (shadowMode) {
@@ -269,6 +301,28 @@ export async function handleMaxUpdate(
   }
 
   await sendWithRateLimit(current, chatId, text);
+
+  // Ответ агента пишется в переписку после отправки: в переписке лежит то,
+  // что клиент действительно получил. Текст восстановленный — клиент
+  // законно получает свои же данные обратно.
+  if (tenantId !== undefined) {
+    await current.options.recordMessage?.({
+      tenantId,
+      conversationId: message.conversationId,
+      // Префикс ответа отличает идентификатор ответа от идентификатора
+      // реплики клиента с тем же `mid`.
+      messageId: `answer:${message.messageId}`,
+      role: "agent",
+      text,
+      sources: outcome.answer.sources.map((source) => ({
+        kind: source.kind,
+        id: source.id,
+        title: source.title,
+        location: source.location,
+      })),
+    });
+  }
+
   current.logger.info(
     current.log(`MAX: ответ отправлен в чат ${chatId} для сообщения ${message.messageId}`),
   );

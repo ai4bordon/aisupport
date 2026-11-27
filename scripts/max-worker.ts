@@ -19,6 +19,7 @@ import { createMaskMappingStore } from "../src/core/mask-store";
 import { notifiesClient } from "../src/core/escalation-mode";
 import { isShadowMode, recordManagerQueue } from "../src/core/shadow-mode";
 import { createOutgoingCheck } from "../src/core/outgoing-check";
+import { createMessageRecorder } from "../src/channels/max/messages";
 import { getTenantId } from "../src/db/tenant";
 
 const token = process.env.MAX_BOT_TOKEN ?? "";
@@ -81,6 +82,11 @@ async function main() {
     // необработанные персональные данные, и ответ, не прошедший проверку,
     // клиенту не отправляется.
     checkOutgoing: createOutgoingCheck(maskStore),
+    // Переписка канала MAX пишется в `messages`: лента канала на экране
+    // демо, история диалога в кабинете менеджера и идемпотентная ветка
+    // веб-чаты смотрят именно туда.
+    recordMessage: createMessageRecorder(statePool),
+    tenantId,
     state,
     // Режим тени — одна настройка на оба канала: она живёт в
     // `tenants.shadow_mode` и читается на каждое событие. Кэш в процессе

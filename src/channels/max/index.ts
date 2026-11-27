@@ -28,6 +28,9 @@ export type {
 export { createMaxClient } from "./client";
 export type { MaxClient, MaxClientOptions } from "./client";
 
+export { createMessageRecorder, deterministicUuid } from "./messages";
+export type { MessageRecordPort, MessagePoolLike, RecordedMessage } from "./messages";
+
 export { createCoreClient, toAgentRunRequest } from "./core";
 export type { AgentRunRequest, CoreClientOptions } from "./core";
 

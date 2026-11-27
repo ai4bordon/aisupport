@@ -48,13 +48,21 @@ function managerCookie(): string {
   return `support_manager=${payload}.${signature}`;
 }
 
-/** Тело запроса: multipart-разбор собирает данные в память. */
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+/**
+ * Тело запроса: multipart-разбор собирает данные в памяти.
+ *
+ * Возвращается `ArrayBuffer`, а не `Buffer`: тело `Request` принимает
+ * `BodyInit`, в который `Buffer` из Node не входит по типам.
+ */
+async function readBody(request: IncomingMessage): Promise<ArrayBuffer> {
   const parts: Buffer[] = [];
   for await (const part of request) {
     parts.push(part as Buffer);
   }
-  return Buffer.concat(parts);
+  const joined = Buffer.concat(parts);
+  const bytes = new Uint8Array(joined.byteLength);
+  bytes.set(joined);
+  return bytes.buffer;
 }
 
 /** Запуск сервера поверх маршрутов среза. */
