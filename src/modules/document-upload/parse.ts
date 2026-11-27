@@ -62,6 +62,20 @@ const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const PDF_SIGNATURE = Buffer.from("%PDF-", "latin1");
 
 /**
+ * DOCX — это ZIP-контейнер с основной частью `word/document.xml`.
+ *
+ * Одной ZIP-сигнатуры мало: обычный архив с тем же расширением не является
+ * документом Word, и разбирать его как документ бессмысленно.
+ */
+function isDocxContainer(bytes: Buffer): boolean {
+  try {
+    return readZipEntries(bytes).some((entry) => entry.name === "word/document.xml");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Формат по сигнатуре содержимого или `null`, если сигнатура не опознана.
  *
  * Текстовые форматы (Markdown, TXT) сигнатуры не имеют: ими считается любой
@@ -71,7 +85,9 @@ const PDF_SIGNATURE = Buffer.from("%PDF-", "latin1");
  */
 export function formatFromContent(bytes: Buffer): SupportedDocumentFormat | null {
   if (bytes.subarray(0, PDF_SIGNATURE.length).equals(PDF_SIGNATURE)) return "pdf";
-  if (bytes.subarray(0, ZIP_SIGNATURE.length).equals(ZIP_SIGNATURE)) return "docx";
+  if (bytes.subarray(0, ZIP_SIGNATURE.length).equals(ZIP_SIGNATURE)) {
+    return isDocxContainer(bytes) ? "docx" : null;
+  }
   if (looksLikeText(bytes)) return "txt";
   return null;
 }
@@ -124,8 +140,9 @@ export function detectFormat(filename: string, bytes: Buffer): SupportedDocument
  * Совпадают ли формат по расширению и формат по сигнатуре.
  *
  * Markdown и TXT разбираются одинаково, поэтому текстовый сигнатурный формат
- * подходит обоим. DOCX — это ZIP-контейнер, и наличие `word/document.xml`
- * проверяется при разборе: пустой ZIP без документа Office — не DOCX.
+ * подходит обоим. DOCX опознаётся по ZIP-контейнеру с основной частью
+ * `word/document.xml`: обычный архив под расширением `.docx` документом
+ * Word не является.
  */
 function formatsMatch(
   byName: SupportedDocumentFormat,

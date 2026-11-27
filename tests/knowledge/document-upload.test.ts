@@ -291,6 +291,39 @@ describe("загрузка документов базы знаний", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("содержимое, не совпадающее с расширением, отклоняется", async () => {
+    const mismatched: Array<{ filename: string; bytes: Buffer }> = [
+      // PDF под именем текстового документа.
+      { filename: "report.txt", bytes: await buildPdf(LONG_TEXT) },
+      // Текст под именем PDF.
+      { filename: "report.pdf", bytes: Buffer.from(LONG_TEXT, "utf8") },
+      // Обычный архив под именем документа Word.
+      { filename: "report.docx", bytes: buildZip([["note.txt", "hello"]]) },
+    ];
+
+    for (const item of mismatched) {
+      try {
+        await uploadDocument({
+          tenantId,
+          filename: item.filename,
+          mimeType: "application/octet-stream",
+          bytes: item.bytes,
+          uploadedBy: "manager-1",
+        });
+        throw new Error(`«${item.filename}» не должен приниматься`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(KnowledgeDocumentError);
+        expect((error as KnowledgeDocumentError).code).toBe("unsupported_media_type");
+      }
+    }
+
+    const documents = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM kb_documents WHERE tenant_id = $1",
+      [tenantId],
+    );
+    expect(documents.rows[0]?.count).toBe("0");
+  });
+
   it("загруженный документ виден менеджеру в списке", async () => {
     const record = await uploadDocument({
       tenantId,
