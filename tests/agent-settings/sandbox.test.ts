@@ -16,25 +16,38 @@ const ARTICLE_TEXT =
 
 type FetchCall = { url: string; body: string };
 
-function stubFetch(calls: FetchCall[]): typeof fetch {
+/**
+ * Ответ модели по умолчанию: текст статьи базы знаний.
+ *
+ * Ответ зависит от того, о чём спросили: на запрос классификатора модель
+ * возвращает код класса обращения, а на генерацию ответа — текст статьи.
+ * Иначе песочница всегда считала бы запрос базой знаний и никогда не
+ * доходила до каталога.
+ */
+function stubFetch(calls: FetchCall[], intent = "product_unknown"): typeof fetch {
   return (async (
     input: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> => {
-    calls.push({ url: String(input), body: String(init?.body ?? "") });
+    const body = String(init?.body ?? "");
+    calls.push({ url: String(input), body });
+    // Запрос классификатора узнаётся по его промпту.
+    const isClassifier = body.includes("Определи класс обращения клиента");
+    // Цитата ответа должна быть из подтверждённого источника: на вопрос о
+    // продуктах источником будет карточка каталога, и цитата берётся из неё.
+    const citation = body.includes("Dr.Web Security Suite")
+      ? "Dr.Web Security Suite"
+      : ARTICLE_TEXT;
+    const content = isClassifier
+      ? intent
+      : JSON.stringify({
+          text: citation,
+          amounts: [],
+          citations: [citation],
+        });
     return new Response(
       JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                text: ARTICLE_TEXT,
-                amounts: [],
-                citations: [ARTICLE_TEXT],
-              }),
-            },
-          },
-        ],
+        choices: [{ message: { content } }],
         usage: { prompt_tokens: 30, completion_tokens: 40, opencode: { list_cost: 0.25 } },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -59,6 +72,79 @@ function articleEmbedding(): number[] {
 describe("песочница настроек агента", () => {
   let tenantId = "";
   let originalFetch: typeof fetch;
+
+/**
+ * Позиции каталога для проверки обращения песочницы к каталогу.
+ *
+ * Каталог заполняется напрямую: тест проверяет маршрут песочницы, а не
+ * разбор фида.
+ */
+async function seedCatalogProducts(): Promise<void> {
+  const pool = testPool();
+
+  await pool.query("DELETE FROM products WHERE tenant_id = $1", [tenantId]);
+
+  const fixtures = [
+    {
+      offerId: "sb-9001",
+      name: "Dr.Web Security Suite, 50 ПК",
+      vendor: "Доктор Веб",
+      price: 80818.4,
+      quantity: 50,
+      categoryId: "sb-cat-av",
+    },
+    {
+      offerId: "sb-9002",
+      name: "Dr.Web Security Suite, 100 ПК",
+      vendor: "Доктор Веб",
+      price: 129000,
+      quantity: 100,
+      categoryId: "sb-cat-av",
+    },
+  ];
+
+  const snapshot = await pool.query<{ id: string }>(
+    `INSERT INTO catalog_snapshots (tenant_id, source_url, feed_date, fetched_at, snapshot_hash, offers_count, categories_count, is_current, source_kind)
+     VALUES ($1, 'https://store.softline.ru/feeds/Softline.yml.gz', now(), now(), $2, $3, 0, true, 'test')
+     RETURNING id`,
+    [tenantId, `hash-sb-${Date.now()}`, fixtures.length],
+  );
+  const snapshotId = snapshot.rows[0]?.id ?? "";
+
+  await pool.query(
+    `INSERT INTO catalog_categories (tenant_id, category_id, name, path)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, category_id) DO UPDATE SET path = EXCLUDED.path`,
+    [
+      tenantId,
+      "sb-cat-av",
+      "Антивирусы для организаций",
+      "Антивирусы и безопасность / Антивирусы для организаций",
+    ],
+  );
+
+  for (const fixture of fixtures) {
+    await pool.query(
+      `INSERT INTO products (tenant_id, offer_id, name, vendor, product_url, price, currency_id, available, delivery, params, snapshot_id, status, published, category_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'RUR', true, true, $7::jsonb, $8, 'approved_by_customer', true, $9)`,
+      [
+        tenantId,
+        fixture.offerId,
+        fixture.name,
+        fixture.vendor,
+        `https://store.softline.ru/test/${fixture.offerId}/`,
+        fixture.price,
+        JSON.stringify({
+          "К-во пользователей": `от ${fixture.quantity} до ${fixture.quantity}`,
+          "Срок действия": "12 мес.",
+          "Способ доставки": "Клиентская",
+        }),
+        snapshotId,
+        fixture.categoryId,
+      ],
+    );
+  }
+}
 
   beforeAll(async () => {
     tenantId = await ensureSliceDatabase(TENANT_SLUG);
@@ -184,5 +270,29 @@ describe("песочница настроек агента", () => {
       [tenantId],
     );
     expect(Number(messages.rows[0]?.count ?? "0")).toBe(0);
+  });
+
+  it("песочница обращается к каталогу: вопрос о продуктах находит позиции", async () => {
+    // Дефект: песочница искала только по базе знаний и отвечала «в
+    // источниках нет информации», хотя обычный чат на тот же вопрос
+    // подбирал позиции из каталога.
+    await seedCatalogProducts();
+
+    const calls: FetchCall[] = [];
+    globalThis.fetch = stubFetch(calls);
+
+    const result = await runSandbox({
+      tenantId,
+      actor: "manager-08",
+      text: "Какие у тебя есть продукты из раздела антивирусы?",
+    });
+
+    // Каталог вызван: в трассе есть узел поиска по каталогу.
+    expect(result.trace.map((step) => step.node)).toContain("catalog");
+    // Позиции каталога попали в источники ответа.
+    expect(result.sources.some((source) => source.kind === "catalog_product")).toBe(true);
+    // Итог не «нет источников»: ответ построен по найденным позициям.
+    expect(result.outcome).toBe("respond");
+    expect(result.grade).not.toBe("no_confirmed_source");
   });
 });

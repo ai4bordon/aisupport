@@ -9,6 +9,20 @@ import {
   hasModelClientOverride,
   type ModelClient,
 } from "@/core/model";
+import {
+  classifierContext,
+  classifierPrompt,
+  normalizeIntent,
+  ROUTE_BY_CLASS,
+  type IntentClass,
+  type IntentRoute,
+} from "@/core/intents";
+import {
+  catalogMatchText,
+  extractSlots,
+  lookupCatalog,
+  type RequirementSlots,
+} from "@/core/catalog-lookup";
 import { readCurrentSettings, readSettingsVersion, type AgentSettings } from "./store";
 
 /**
@@ -97,6 +111,65 @@ function buildSandboxSourceContext(sources: SandboxSourceWithText[]): string {
 }
 
 /**
+ * Классификация запроса менеджера.
+ *
+ * Песочница отвечает так же, как отвечает чат: вопрос о продуктах уходит в
+ * каталог, вопрос о порядке работы — в базу знаний. Без классификации
+ * песочница искала только по базе знаний и на вопрос «какие у тебя есть
+ * продукты из раздела антивирусы» отвечала «в источниках нет информации».
+ *
+ * Классификатор — тот же, что в ядре: тот же промпт, тот же разбор ответа.
+ * Ошибка классификации не роняет проход: запрос считается базой знаний.
+ */
+async function classifySandbox(
+  client: ModelClient,
+  text: string,
+  slots: RequirementSlots,
+): Promise<IntentClass> {
+  try {
+    const result = await client.complete({
+      sessionId: `sandbox_classify_${randomUUID()}`,
+      messages: [
+        {
+          role: "system",
+          content: classifierPrompt(
+            classifierContext({
+              discovery: slots.discovery,
+              productQuery: slots.productQuery,
+              domain: slots.domain,
+              quantity: slots.quantity,
+            }),
+          ),
+        },
+        { role: "user", content: text },
+      ],
+      maxTokens: 32,
+    });
+    return normalizeIntent(result.text);
+  } catch {
+    return "out_of_scope";
+  }
+}
+
+/**
+ * Источники каталога для контекста модели.
+ *
+ * Формат тот же, что у ядра: карточка позиции целиком — название, вендор,
+ * цена, наличие и ссылка. Песочница собирает свой контекст, но содержимое
+ * источника должно совпадать с боевым, иначе менеджер увидит в песочнице
+ * другой ответ, чем получит клиент.
+ */
+function catalogSources(matches: Parameters<typeof catalogMatchText>[0][]): SandboxSourceWithText[] {
+  return matches.map((match) => ({
+    kind: "catalog_product",
+    id: match.offerId,
+    title: match.name,
+    location: match.url,
+    text: catalogMatchText(match),
+  }));
+}
+
+/**
  * Клиент модели песочницы.
  *
  * Порядок: клиент, подставленный на границе (`setModelClient` из
@@ -145,15 +218,60 @@ export async function runSandbox(input: SandboxInput): Promise<SandboxResult> {
     detail: `Замаскировано полей: ${masked.maskedFieldsCount}`,
   });
 
+  const client = resolveClient(settings);
+
+  // Узел классификации: тот же выбор дорожки, что в ядре. От него зависит,
+  // куда пойдёт запрос — в каталог или в базу знаний.
+  const slots = extractSlots(masked.maskedText);
+  const classifyStartedAt = Date.now();
+  const intent = await classifySandbox(client, masked.maskedText, slots);
+  const route: IntentRoute = ROUTE_BY_CLASS[intent];
+  trace.push({
+    node: "classify",
+    latencyMs: Date.now() - classifyStartedAt,
+    tokensIn: 0,
+    tokensOut: 0,
+    costRub: 0,
+    detail: `Класс: ${intent}, дорожка: ${route}`,
+  });
+
+  // Узел каталога: на дорожке «каталог» позиции ищутся в снимке фида, как в
+  // бою. Без этого вопрос о продуктах оставался без источников.
+  const catalogStartedAt = Date.now();
+  let catalog: SandboxSourceWithText[] = [];
+  if (route === "catalog") {
+    try {
+      const lookup = await lookupCatalog(masked.maskedText, slots, {
+        tenantId: input.tenantId,
+        intent,
+      });
+      catalog = catalogSources(lookup.matches);
+    } catch {
+      // Каталог недоступен — проход продолжается по базе знаний, как в ядре.
+      catalog = [];
+    }
+  }
+  trace.push({
+    node: "catalog",
+    latencyMs: Date.now() - catalogStartedAt,
+    tokensIn: 0,
+    tokensOut: 0,
+    costRub: 0,
+    detail: `Позиций каталога: ${catalog.length}`,
+  });
+
   const retrieveStartedAt = Date.now();
   const found = await search(masked.maskedText, input.tenantId);
-  const sources: SandboxSourceWithText[] = found.map((result) => ({
-    kind: result.kind,
-    id: result.articleId,
-    title: result.title,
-    location: result.location,
-    text: result.text,
-  }));
+  const sources: SandboxSourceWithText[] = [
+    ...catalog,
+    ...found.map((result) => ({
+      kind: result.kind,
+      id: result.articleId,
+      title: result.title,
+      location: result.location,
+      text: result.text,
+    })),
+  ];
   trace.push({
     node: "retrieve",
     latencyMs: Date.now() - retrieveStartedAt,
@@ -163,7 +281,6 @@ export async function runSandbox(input: SandboxInput): Promise<SandboxResult> {
     detail: `Источников: ${sources.length}`,
   });
 
-  const client = resolveClient(settings);
   const respondStartedAt = Date.now();
   const result = await client.complete({
     sessionId: `sandbox_${sessionId}`,
@@ -189,8 +306,10 @@ export async function runSandbox(input: SandboxInput): Promise<SandboxResult> {
 
   const validation = validateAnswer(
     { text: result.text, amounts: result.amounts, citations: result.citations },
+    // Вид источника сохраняется: позиция каталога — такой же источник для
+    // валидатора, как статья базы знаний, и вид нужен для проверки цитат.
     sources.map((source) => ({
-      kind: "kb_article" as const,
+      kind: source.kind as "kb_article" | "kb_document" | "catalog_product",
       id: source.id,
       title: source.title,
       location: source.location,
