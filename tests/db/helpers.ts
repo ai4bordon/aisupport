@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Pool, PoolClient } from "pg";
 import { getPool } from "@/db/pool";
+import { scopeEnv } from "../env-scope/helpers";
 
 /**
  * Тестовый помощник: общая база для тестов среза.
@@ -158,7 +159,11 @@ export async function resetTenant(slug: string): Promise<string> {
   // окружения живёт на уровне процесса, а воркер Vitest переиспользуется между
   // тестовыми файлами. Без этой строки файл наследует slug предыдущего и
   // пишет счётчики и данные в чужого арендатора.
-  process.env.TENANT_SLUG = slug;
+  //
+  // Значение действует до конца тестового файла: помощник изоляции
+  // окружения возвращает его после файла, поэтому соседний файл slug
+  // предыдущего не наследует (аудит B14).
+  scopeEnv("TENANT_SLUG", slug);
 
   const existing = await pool.query<{ id: string }>(
     "SELECT id FROM tenants WHERE slug = $1",
