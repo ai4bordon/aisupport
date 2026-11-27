@@ -23,6 +23,7 @@ import { catalog, type CatalogItem } from "@/modules/catalog";
 import {
   detectDomain,
   domainCategoryMarkers,
+  parseCatalogDomain,
   type CatalogDomain,
 } from "@/core/catalog-domain";
 import type { IntentClass } from "@/core/intents";
@@ -366,10 +367,9 @@ export function extractProductQuery(text: string): string | null {
   if (meaningful.length === 0) {
     return null;
   }
-  // Одно-единственное слово из словаря запроса не считается названием.
-  if (meaningful.length === 1 && words.length > 1) {
-    return null;
-  }
+  // Одно значимое слово — тоже название продукта: «Сколько стоит MDaemon» —
+  // это запрос про конкретный продукт, а не описание задачи. Эвристика
+  // «одно слово — не название» отсекала самый частый вопрос клиента.
   return meaningful.join(" ");
 }
 
@@ -398,6 +398,207 @@ export function extractVendor(text: string, vendors: readonly string[]): string 
 }
 
 /**
+ * Слова описания задачи и параметров, а не названия продукта.
+ *
+ * Названия продуктов — бренды («MDaemon», «Dr.Web», «Kaspersky»), а описание
+ * задачи состоит из общих слов («защита почты», «антивирус», «документы»).
+ * По общим словам каталог не ищется: поиск по слову «защит» находил
+ * «Защитный чехол с ремнем на плечо».
+ *
+ * Сравнение — по началу слова, потому что слово меняет падеж: «защита»,
+ * «защиты», «защитить».
+ */
+const TASK_DESCRIPTION_STEMS = [
+  "защит",
+  "почт",
+  "писем",
+  "письм",
+  "спам",
+  "рассылк",
+  "антивирус",
+  "вирус",
+  "безопасн",
+  "шифрован",
+  "аутентиф",
+  "вредонос",
+  "шпионск",
+  "firewall",
+  "межсетев",
+  "email",
+  "e-mail",
+  "mail",
+  "smtp",
+  "imap",
+  "офис",
+  "office",
+  "документ",
+  "текст",
+  "таблиц",
+  "презентац",
+  "excel",
+  "word",
+  "pdf",
+  "срок",
+  "лиценз",
+  "программ",
+  "подобрать",
+  "вариант",
+  "решение",
+  "задач",
+  "потребност",
+  "месяц",
+  "год",
+  "лет",
+  "сервер",
+  "облак",
+  "разверт",
+  "количеств",
+  "штук",
+  "шт",
+  "пк",
+  "пользовател",
+  "сотрудник",
+  "работник",
+  "устройств",
+  "инфраструктур",
+  "бюджет",
+  "огранич",
+  "оплат",
+  "платим",
+  "стоимост",
+  "цена",
+  "скидк",
+  "доставк",
+  "поставк",
+  "установк",
+  "внедрен",
+  "поддержк",
+  "продлен",
+];
+
+/**
+ * Слово описания задачи.
+ *
+ * Сравнение по началу слова: «защита», «защиты» и «защитить» — одно и то же
+ * слово в разных падежах.
+ */
+function isTaskDescriptionWord(word: string): boolean {
+  const lower = word.toLowerCase();
+  return TASK_DESCRIPTION_STEMS.some((stem) => lower.startsWith(stem));
+}
+
+/**
+ * Похоже ли слово на название продукта.
+ *
+ * Название — это бренд: оно начинается с заглавной буквы или содержит
+ * латиницу. Общее слово даже с заглавной буквы названием не является:
+ * «Защита почты» — описание задачи, а «MDaemon» — продукт.
+ */
+function looksLikeBrandWord(word: string): boolean {
+  if (word.length < 3) return false;
+  return /^\p{Lu}/u.test(word) || /[a-z]/u.test(word);
+}
+
+/**
+ * Название продукта, названное клиентом явно.
+ *
+ * Отличается от `extractProductQuery`: там возвращается любой остаток от
+ * слов запроса, а здесь — только то, что похоже на название продукта.
+ * Различие нужно для смены предмета в диалоге: «нужен продукт для защиты
+ * почты» — это описание задачи, а «нужен MDaemon» — название, и только
+ * во втором случае сохранённый слот подлежит перезаписи.
+ *
+ * Ответ на уточняющий вопрос («на 12 месяцев, развёртываем на сервере»)
+ * названием не является: там нет ни заглавной буквы, ни латиницы.
+ */
+export function explicitProductQuery(text: string): string | null {
+  const query = extractProductQuery(text);
+  if (query === null) return null;
+
+  // Слова исходного текста: по ним видно регистр и латиницу, а по нижнему
+  // регистру — смысл слова.
+  const parts = text.split(/[^\p{L}\p{N}]+/u);
+  const lowerParts = text.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  for (let index = 0; index < lowerParts.length; index += 1) {
+    const lower = lowerParts[index] ?? "";
+    if (lower.length === 0) continue;
+    const original = parts[index] ?? lower;
+    if (STOP_WORDS.has(lower) || /^\d+$/u.test(lower)) continue;
+    if (isTaskDescriptionWord(lower)) continue;
+    if (looksLikeBrandWord(original)) return query;
+  }
+  return null;
+}
+
+/**
+ * Срок лицензии в месяцах из текста.
+ *
+ * Единица берётся из самого совпадения, а не из всего текста: «на 12
+ * месяцев, платим за год» — это 12 месяцев, а не 144. Раньше единица искалась
+ * по всему тексту, и любое слово «год» переводило весь срок в годы.
+ *
+ * Год приводится к месяцам: слот хранится в месяцах, и позиция «на 1 год»
+ * подходит под запрос на 12 месяцев.
+ */
+function parseTermMonths(text: string): number | null {
+  const match = text.match(
+    /(\d+)\s*(месяц[\p{L}\p{N}]*|мес[\p{L}\p{N}]*|год[\p{L}\p{N}]*|лет[\p{L}\p{N}]*)/u,
+  );
+  if (match?.[1] === undefined || match[2] === undefined) return null;
+  const value = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(value)) return null;
+  return /^(?:год|лет)/u.test(match[2]) ? value * 12 : value;
+}
+
+/**
+ * Сумма в рублях из текста.
+ *
+ * Число с множителем «тыс.» умножается на тысячу: «бюджет 10 тыс.» — это
+ * 10000 рублей, а не 10. Разделители разрядов («50 000») отбрасываются.
+ */
+function parseMoneyRubles(text: string): number | null {
+  const match = text.match(
+    /(\d[\d\s]*)\s*(?:(тысяч[\p{L}\p{N}]*|тыс\.?|k)\s*(?:руб[\p{L}\p{N}]*|р\.|₽)?|руб[\p{L}\p{N}]*|₽|р\.)/u,
+  );
+  if (match?.[1] === undefined) return null;
+  const digits = match[1].replace(/[^\d]/gu, "");
+  if (digits.length === 0) return null;
+  const value = Number.parseInt(digits, 10);
+  if (!Number.isFinite(value)) return null;
+  const multiplier = match[2];
+  return multiplier !== undefined && /^(?:тысяч|тыс|k)/u.test(multiplier)
+    ? value * 1000
+    : value;
+}
+
+/**
+ * Количество лицензий или пользователей из текста.
+ *
+ * Число берётся рядом со словом про лицензии или пользователей: «12
+ * месяцев» — это срок, а не количество лицензий. Голое число берётся только
+ * если в тексте нет срока и бюджета: иначе «12 месяцев» или «10 тыс.»
+ * превратились бы в количество.
+ */
+function parseQuantity(
+  text: string,
+  termMonths: number | null,
+  hasBudget: boolean,
+): number | null {
+  const match = text.match(
+    /(\d+)\s*(?:шт|штук|лицензи[йиюей]|польз[\p{L}\p{N}]*|работник[\p{L}\p{N}]*|сотрудник[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|пк)/u,
+  );
+  if (match?.[1] !== undefined) {
+    const value = Number.parseInt(match[1], 10);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (termMonths !== null || hasBudget) return null;
+  const bare = text.match(/\b(\d{1,5})\b/u);
+  if (bare?.[1] === undefined) return null;
+  const value = Number.parseInt(bare[1], 10);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
  * Извлекает слоты из текста сообщения.
  *
  * Количество и срок распознаются по числам рядом со словами-подсказками,
@@ -406,30 +607,23 @@ export function extractVendor(text: string, vendors: readonly string[]): string 
 export function extractSlots(text: string): RequirementSlots {
   const lower = text.toLowerCase();
 
-  let termMonths: number | null = null;
-  const termMatch = lower.match(/(\d+)\s*(?:месяц|мес|год|лет)/u);
-  if (termMatch?.[1]) {
-    const value = Number.parseInt(termMatch[1], 10);
-    termMonths = lower.includes("год") || lower.includes("лет") ? value * 12 : value;
+  const termMonths = parseTermMonths(lower);
+
+  // Бюджет: «бюджета нет», «нет бюджета» и «не ограничен» — это ответ, а не
+  // отсутствие ответа. Без различения вопрос о бюджете повторялся бы.
+  let budget: string | null = null;
+  if (
+    /бюджет[\p{L}\p{N}]*\s+(?:нет|не\s+огранич|без\s+огранич)|нет\s+бюджет|без\s+бюджета|бюджета\s+нет|не\s+ограничен|без\s+ограничени/iu.test(
+      lower,
+    )
+  ) {
+    budget = "нет";
+  } else {
+    const amount = parseMoneyRubles(lower);
+    budget = amount === null ? null : String(amount);
   }
 
-  let quantity: number | null = null;
-  // Количество — только рядом со словом про лицензии или пользователей:
-  // «12 месяцев» — это срок, а не количество лицензий.
-  const quantityMatch = lower.match(
-    /(\d+)\s*(?:шт|штук|лицензи[йиюей]|польз[\p{L}\p{N}]*|работник[\p{L}\p{N}]*|сотрудник[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|пк)/u,
-  );
-  if (quantityMatch?.[1]) {
-    quantity = Number.parseInt(quantityMatch[1], 10);
-  }
-  if (quantity === null) {
-    // Голое число берётся, только если в тексте нет срока и бюджета: иначе
-    // «12 месяцев» или «50000 рублей» превратились бы в количество.
-    const bare = lower.match(/\b(\d{1,5})\b/u);
-    if (bare?.[1] && termMonths === null && !/\s*руб|₽/u.test(lower)) {
-      quantity = Number.parseInt(bare[1], 10);
-    }
-  }
+  const quantity = parseQuantity(lower, termMonths, budget !== null);
 
   let deployment: string | null = null;
   if (/облак|cloud|в облаке/i.test(lower)) {
@@ -500,6 +694,102 @@ function paramValue(params: Record<string, string | string[]>, names: string[]):
   return null;
 }
 
+/** Строка позиции каталога из базы. */
+type ItemRow = {
+  offer_id: string;
+  name: string;
+  vendor: string | null;
+  price: string;
+  available: boolean;
+  feed_date: Date | null;
+  snapshot_hash: string;
+  category_path: string | null;
+  group_id: string | null;
+  vendor_url: string | null;
+  product_url: string | null;
+  old_price: string | null;
+  currency_id: string;
+  category_id: string | null;
+  delivery: boolean | null;
+  pickup: boolean | null;
+  description: string | null;
+  params: Record<string, string | string[]>;
+};
+
+/**
+ * Карточки позиций по списку идентификаторов — одним запросом.
+ *
+ * Сборка карточек по одной давала N+1: до 50 последовательных запросов под
+ * бюджетом шага в 30 секунд. Список позиций уже известен, поэтому он
+ * читается одним запросом с `offer_id = ANY(...)`.
+ */
+async function loadCatalogItems(
+  tenantId: string,
+  offerIds: readonly string[],
+): Promise<Map<string, CatalogItem>> {
+  const items = new Map<string, CatalogItem>();
+  if (offerIds.length === 0) return items;
+
+  const result = await getPool().query<ItemRow>(
+    `SELECT p.offer_id, p.name, p.vendor, p.price, p.available,
+            c.path AS category_path,
+            s.feed_date, s.snapshot_hash,
+            p.group_id, p.vendor_url, p.product_url, p.old_price, p.currency_id,
+            p.category_id, p.delivery, p.pickup, p.description, p.params
+       FROM products p
+       JOIN catalog_snapshots s ON s.id = p.snapshot_id
+       LEFT JOIN catalog_categories c
+         ON c.tenant_id = p.tenant_id AND c.category_id = p.category_id
+      WHERE p.tenant_id = $1 AND p.offer_id = ANY($2::text[])`,
+    [tenantId, [...offerIds]],
+  );
+
+  for (const row of result.rows) {
+    items.set(row.offer_id, {
+      offerId: row.offer_id,
+      name: row.name,
+      vendor: row.vendor,
+      categoryPath: row.category_path,
+      price: Number(row.price),
+      available: row.available,
+      priceConfirmed: Number(row.price) > 0,
+      feedDate: row.feed_date ? row.feed_date.toISOString() : "",
+      snapshotHash: row.snapshot_hash,
+      groupId: row.group_id,
+      vendorUrl: row.vendor_url,
+      productUrl: row.product_url,
+      oldPrice: row.old_price === null ? null : Number(row.old_price),
+      currencyId: row.currency_id,
+      categoryId: row.category_id,
+      delivery: row.delivery,
+      pickup: row.pickup,
+      description: row.description,
+      params: row.params,
+    });
+  }
+  return items;
+}
+
+/**
+ * Карточки позиций в порядке найденных.
+ *
+ * Порядок выдачи поиска сохраняется: он отражает релевантность запросу, и
+ * сортировка по цене перебивала бы её.
+ */
+async function loadMatchesByOfferIds(
+  tenantId: string,
+  offerIds: readonly string[],
+): Promise<CatalogMatch[]> {
+  const items = await loadCatalogItems(tenantId, offerIds);
+  const matches: CatalogMatch[] = [];
+  for (const offerId of offerIds) {
+    const item = items.get(offerId);
+    if (item === undefined) continue;
+    matches.push(toMatch(item));
+  }
+  return matches;
+}
+
 /**
  * Количество лицензий позиции.
  *
@@ -566,7 +856,9 @@ function slotSatisfied(
       if (slots.termMonths === null) return false;
       const term = paramValue(item.params, ["Срок действия", "Срок лицензии", "Срок", "Период"]);
       if (term === null) return true;
-      const months = firstNumber(term);
+      // Срок позиции приводится к месяцам тем же разбором, что и срок
+      // клиента: «1 год» — это 12 месяцев, а не 1.
+      const months = parseTermMonths(term.toLowerCase());
       return months !== null ? months >= slots.termMonths : true;
     }
     case "deployment": {
@@ -606,26 +898,45 @@ export async function lookupCatalog(
   slots: RequirementSlots,
   options: { tenantId: string; limit?: number; intent?: IntentClass },
 ): Promise<CatalogLookup> {
+  // Название, названное клиентом явно, и название из сохранённого слота.
+  //
+  // Явное название важнее сохранённого: клиент мог передумать («Нужен
+  // MDaemon» → «А сколько стоит Kaspersky?») или назвать продукт после
+  // подбора по задаче («не знаю, что нужно» → «Нужен MDaemon Security
+  // Gateway»). В обоих случаях сохранённое название устарело.
+  const namedNow = explicitProductQuery(text);
+  const productChanged =
+    namedNow !== null && slots.productQuery !== null && slots.productQuery !== namedNow;
   // В режиме подбора продукт не назван: подбор идёт по предметной области
   // задачи, даже если ответ на уточняющий вопрос содержит слова, похожие на
   // название продукта («бюджета нет, инфраструктура своя»).
+  //
+  // Явное название снимает режим подбора: он описывает текущий подбор, а не
+  // признак диалога навсегда. Иначе после одного «не знаю, что нужно» точный
+  // подбор по названию был недоступен до конца диалога.
   const inDiscovery =
-    options.intent === "product_unknown" ||
-    slots.discovery !== null ||
-    extractProductQuery(text) === null;
-  const productQuery = inDiscovery
-    ? slots.productQuery
-    : slots.productQuery ?? extractProductQuery(text);
+    namedNow === null &&
+    (options.intent === "product_unknown" ||
+      slots.discovery !== null ||
+      extractProductQuery(text) === null);
+  const productQuery = namedNow ?? (inDiscovery ? slots.productQuery : slots.productQuery ?? extractProductQuery(text));
   const vendors = await listVendors(options.tenantId);
   // Вендор берётся из текста, а при его отсутствии — из сохранённого слота:
   // ответ на уточняющий вопрос («на 12 месяцев») вендора не содержит, и без
   // сохранённого вендора в выдачу подмешивались позиции других производителей
   // с похожим словом в названии.
-  const vendor = extractVendor(text, vendors) ?? slots.vendor;
+  //
+  // При смене предмета сохранённый вендор не используется: он относится к
+  // прежнему продукту, и поиск по новому названию шёл бы по старому вендору.
+  const vendor =
+    extractVendor(text, vendors) ?? (productChanged ? null : slots.vendor);
   const mergedSlots: RequirementSlots = { ...slots, vendor, productQuery };
   // Домен берётся из сохранённого слота: ответ на уточняющий вопрос уже не
-  // содержит признаков домена.
-  const domain = (slots.domain ?? detectDomain(text)) as CatalogDomain;
+  // содержит признаков домена. Значение из базы проверяется: неизвестный
+  // домен не является доменом и не должен ронять подбор молча.
+  const domain = productChanged
+    ? detectDomain(text)
+    : parseCatalogDomain(slots.domain) ?? detectDomain(text);
 
   // Клиент не назвал продукт: подбираем по предметной области задачи, а не
   // по словам запроса. Поиск по словам давал мусор — на «защитить почту»
@@ -668,12 +979,11 @@ export async function lookupCatalog(
     limit: FETCH_LIMIT,
   });
 
-  const matches: CatalogMatch[] = [];
-  for (const hit of hits) {
-    const item = await catalog.getByOfferId(hit.offerId, { tenantId: options.tenantId });
-    if (item === null) continue;
-    matches.push(toMatch(item));
-  }
+  // Карточки позиций читаются одним запросом, а не по одной на позицию.
+  let matches = await loadMatchesByOfferIds(
+    options.tenantId,
+    hits.map((hit) => hit.offerId),
+  );
 
   // Если клиент назвал вендор, показываются только его позиции: «нужен
   // MDaemon Security Gateway» — это про MDaemon, а «Security Gateway» в
@@ -681,8 +991,7 @@ export async function lookupCatalog(
   if (vendor !== null) {
     const ofVendor = matches.filter((match) => match.vendor === vendor);
     if (ofVendor.length > 0) {
-      matches.length = 0;
-      matches.push(...ofVendor);
+      matches = ofVendor;
     }
   }
 
@@ -712,11 +1021,10 @@ export async function lookupCatalog(
       tenantId: options.tenantId,
       limit: FETCH_LIMIT,
     });
-    for (const hit of wide) {
-      const item = await catalog.getByOfferId(hit.offerId, { tenantId: options.tenantId });
-      if (item === null) continue;
-      matches.push(toMatch(item));
-    }
+    matches = await loadMatchesByOfferIds(
+      options.tenantId,
+      wide.map((hit) => hit.offerId),
+    );
   }
 
   const missing = missingSlots(mergedSlots);
