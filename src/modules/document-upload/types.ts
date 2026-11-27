@@ -52,6 +52,8 @@ export type DocumentRecord = {
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  /** Путь сохранённого файла: по нему материал читается при повторном разборе. */
+  storagePath: string;
   status: DocumentStatus;
   parseStatus: ParseStatus;
   parseError: string | null;
@@ -61,6 +63,8 @@ export type DocumentRecord = {
   sourceUrl: string | null;
   snapshotHash: string | null;
   approvedBy: string | null;
+  /** Момент одобрения: до него документ ждёт проверки. */
+  approvedAt: string | null;
   rejectedReason: string | null;
   retryCount: number;
   createdAt: string;

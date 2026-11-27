@@ -15,6 +15,7 @@ type DocumentRow = {
   id: string;
   tenant_id: string;
   filename: string;
+  storage_path: string;
   mime_type: string;
   size_bytes: number;
   status: DocumentStatus;
@@ -26,6 +27,7 @@ type DocumentRow = {
   source_url: string | null;
   snapshot_hash: string | null;
   approved_by: string | null;
+  approved_at: Date | null;
   rejected_reason: string | null;
   retry_count: number;
   created_at: Date;
@@ -33,9 +35,9 @@ type DocumentRow = {
 
 /** Колонки документа: читаются одинаково во всех выборках. */
 const COLUMNS = `
-  id, tenant_id, filename, mime_type, size_bytes, status, parse_status, parse_error,
+  id, tenant_id, filename, mime_type, size_bytes, storage_path, status, parse_status, parse_error,
   chunks_count, extracted_chars, source_kind, source_url, snapshot_hash,
-  approved_by, rejected_reason, retry_count, created_at
+  approved_by, approved_at, rejected_reason, retry_count, created_at
 `;
 
 /** Доменная запись из строки таблицы. */
@@ -46,6 +48,7 @@ function toRecord(row: DocumentRow): DocumentRecord {
     filename: row.filename,
     mimeType: row.mime_type,
     sizeBytes: Number(row.size_bytes),
+    storagePath: row.storage_path,
     status: row.status,
     parseStatus: row.parse_status,
     parseError: row.parse_error,
@@ -55,6 +58,7 @@ function toRecord(row: DocumentRow): DocumentRecord {
     sourceUrl: row.source_url,
     snapshotHash: row.snapshot_hash,
     approvedBy: row.approved_by,
+    approvedAt: row.approved_at?.toISOString() ?? null,
     rejectedReason: row.rejected_reason,
     retryCount: Number(row.retry_count),
     createdAt: row.created_at.toISOString(),
@@ -68,6 +72,7 @@ function toRecord(row: DocumentRow): DocumentRecord {
  * видел материал даже тогда, когда разбор не удался.
  */
 export async function insertDocument(input: {
+  id: string;
   tenantId: string;
   filename: string;
   mimeType: string;
@@ -78,11 +83,12 @@ export async function insertDocument(input: {
 }): Promise<DocumentRecord> {
   const result = await getPool().query<DocumentRow>(
     `INSERT INTO kb_documents (
-       tenant_id, filename, mime_type, size_bytes, storage_path, status,
+       id, tenant_id, filename, mime_type, size_bytes, storage_path, status,
        parse_status, chunks_count, extracted_chars, source_kind, snapshot_hash, provenance
-     ) VALUES ($1, $2, $3, $4, $5, 'pending', 'not_parsed', 0, 0, 'manager_upload', $6, $7::jsonb)
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'not_parsed', 0, 0, 'manager_upload', $7, $8::jsonb)
      RETURNING ${COLUMNS}`,
     [
+      input.id,
       input.tenantId,
       input.filename,
       input.mimeType,
@@ -189,7 +195,13 @@ export async function insertChunks(
   }
 }
 
-/** Результат успешного разбора: материал разобран, ждёт одобрения. */
+/**
+ * Результат успешного разбора: материал разобран, ждёт одобрения.
+ *
+ * Счётчик попыток растёт только при повторной обработке: первая загрузка —
+ * это первая попытка, а не «повтор», и считать её повтором было бы враньём в
+ * журнале восстановления.
+ */
 export async function markParsed(
   client: Transaction,
   input: {
@@ -197,18 +209,28 @@ export async function markParsed(
     documentId: string;
     chunksCount: number;
     extractedChars: number;
+    isRetry: boolean;
   },
 ): Promise<void> {
   await client.query(
     `UPDATE kb_documents
      SET parse_status = 'parsed',
          parse_error = NULL,
+         status = 'pending',
          chunks_count = $3,
          extracted_chars = $4,
          parsed_at = now(),
-         last_attempt_at = now()
+         last_attempt_at = now(),
+         failed_at = NULL,
+         retry_count = retry_count + CASE WHEN $5 THEN 1 ELSE 0 END
      WHERE tenant_id = $1 AND id = $2`,
-    [input.tenantId, input.documentId, input.chunksCount, input.extractedChars],
+    [
+      input.tenantId,
+      input.documentId,
+      input.chunksCount,
+      input.extractedChars,
+      input.isRetry,
+    ],
   );
 }
 
@@ -216,8 +238,8 @@ export async function markParsed(
  * Результат неудачного разбора: материал остаётся в базе в состоянии ошибки.
  *
  * Документ не удаляется: менеджер должен видеть, что материал не удался, и
- * повторить попытку. Число попыток и время последней попытки пишутся рядом —
- * по ним видно, что попытка была и когда.
+ * повторить попытку. Счётчик попыток и время последней попытки пишутся рядом
+ * — по ним видно, что попытка была и когда.
  */
 export async function markFailed(
   client: Transaction,
@@ -225,7 +247,7 @@ export async function markFailed(
     tenantId: string;
     documentId: string;
     parseError: string;
-    countAttempt: boolean;
+    isRetry: boolean;
   },
 ): Promise<void> {
   await client.query(
@@ -238,7 +260,7 @@ export async function markFailed(
          last_attempt_at = now(),
          retry_count = retry_count + CASE WHEN $4 THEN 1 ELSE 0 END
      WHERE tenant_id = $1 AND id = $2`,
-    [input.tenantId, input.documentId, input.parseError, input.countAttempt],
+    [input.tenantId, input.documentId, input.parseError, input.isRetry],
   );
 }
 

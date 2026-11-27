@@ -113,6 +113,7 @@ export async function uploadDocument(
 
   try {
     const record = await insertDocument({
+      id,
       tenantId: input.tenantId,
       filename: input.filename,
       mimeType: mimeTypeFor(format),
@@ -128,7 +129,7 @@ export async function uploadDocument(
       },
     });
 
-    return await processDocument(record, input.bytes, format, options, true);
+    return await processDocument(record, input.bytes, format, options, false);
   } catch (error) {
     // Запись не создана: файла на диске быть не должно.
     await rm(directory, { recursive: true, force: true });
@@ -163,7 +164,7 @@ export async function retryDocumentParse(
     );
   }
 
-  const bytes = await readFile(recordPath(record));
+  const bytes = await readFile(record.storagePath);
   const format = detectFormat(record.filename, bytes);
 
   return processDocument(record, bytes, format, options, true);
@@ -285,7 +286,7 @@ async function processDocument(
   bytes: Buffer,
   format: SupportedDocumentFormat,
   options: DocumentUploadOptions,
-  countAttempt: boolean,
+  isRetry: boolean,
 ): Promise<DocumentRecord> {
   const parser = options.parser ?? parseDocument;
   const provider = resolveEmbeddingProvider(options);
@@ -324,11 +325,12 @@ async function processDocument(
         documentId: record.id,
         chunksCount: chunks.length,
         extractedChars: text.length,
+        isRetry,
       });
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      await markFailure(record, error, countAttempt);
+      await markFailure(record, error, isRetry);
     }
   } finally {
     client.release();
@@ -371,7 +373,7 @@ async function withEmbeddings(
 async function markFailure(
   record: DocumentRecord,
   error: unknown,
-  countAttempt: boolean,
+  isRetry: boolean,
 ): Promise<void> {
   const message =
     error instanceof KnowledgeDocumentError
@@ -388,7 +390,7 @@ async function markFailure(
       tenantId: record.tenantId,
       documentId: record.id,
       parseError: message.slice(0, 500),
-      countAttempt,
+      isRetry,
     });
     await client.query("COMMIT");
   } catch (failure) {
@@ -406,7 +408,3 @@ function safeFileName(filename: string): string {
   return cleaned.length > 0 ? cleaned : "document";
 }
 
-/** Путь сохранённого файла: по идентификатору документа. */
-function recordPath(record: DocumentRecord): string {
-  return join(documentsDirectory(), record.id, safeFileName(record.filename));
-}
