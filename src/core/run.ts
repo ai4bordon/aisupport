@@ -31,7 +31,7 @@ import {
   type ConfirmedSource,
 } from "@/core/promise-extract";
 import { currentEmbeddingProvider, search } from "@/modules/knowledge";
-import { check, ruleKeyForRequest } from "@/modules/policy";
+import { check, requestedPercent, ruleKeyForRequest } from "@/modules/policy";
 import { recordPromise, resolveContactEmail } from "@/modules/promises";
 import { recordStep } from "@/modules/telemetry";
 import type { AgentStep } from "@/modules/telemetry";
@@ -161,6 +161,14 @@ const SYSTEM_PROMPT = [
   "Без такой строки обязательство не считается зафиксированным, и клиент его не получит.",
   "Если срока в источниках нет — обязательство не давай, строку ОБЕЩАНИЕ не пиши.",
   "В веб-чате адрес отправки клиент ещё не назвал: не обещай отправку на адрес, пока его нет.",
+  // Полномочия по коммерческим условиям — ADR-0019.
+  "Скидку без купона до 5% можешь предложить сам, больше 5% — не обещай: клиент уходит менеджеру.",
+  "Отсрочку платежа и возврат средств не обещай никогда — это решает менеджер.",
+  // КП и счёт — ADR-0019: одобрение менеджера не требуется.
+  "Коммерческое предложение и счёт по позиции с ценой в каталоге оформляются сразу,",
+  "без ожидания проверки менеджером: менеджер потом подтверждает фактическую поставку.",
+  "Отсутствие товара в наличии по снимку фида не мешает назвать цену и оформить документ.",
+  "О наличии говори как о состоянии снимка фида, а не как о подтверждённом факте.",
 ].join(" ");
 
 function nowMs(): number {
@@ -738,11 +746,14 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
   // Узел 3: проверка полномочий.
   const policyStartedAt = nowMs();
   const ruleKey = ruleKeyForRequest(input.text);
+  // Процент скидки нужен, чтобы отличить «до 5%» от «10%»: разрешающее
+  // правило без порога пропустило бы и то, и другое (ADR-0019).
+  const percent = ruleKey === "discount_request" ? requestedPercent(input.text) : null;
   let policyAllowed = true;
   let policyReason: string | null = null;
   if (ruleKey) {
     try {
-      const decision = await check({ text: input.text, ruleKey }, tenantId);
+      const decision = await check({ text: input.text, ruleKey, percent }, tenantId);
       policyAllowed = decision.allowed;
       policyReason = decision.reason;
     } catch {
@@ -757,7 +768,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     tokensOut: 0,
     costRub: 0,
     latencyMs: elapsedSince(policyStartedAt),
-    metadata: { ruleKey, allowed: policyAllowed },
+    metadata: { ruleKey, allowed: policyAllowed, percent },
     sourceIds: [],
     outcome: policyAllowed ? null : "escalate",
     model: null,
