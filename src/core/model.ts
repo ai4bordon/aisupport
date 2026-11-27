@@ -340,21 +340,193 @@ export const stubModelClient: ModelClient = {
 
 let activeClient: ModelClient | null = null;
 
-/** Подмена клиента модели — только для тестов и песочницы. */
-export function setModelClient(client: ModelClient): void {
+/** Подменён ли клиент модели на границе: только `setModelClient` подменяет. */
+let clientOverridden = false;
+
+/**
+ * Подмена клиента модели — только для тестов и песочницы.
+ *
+ * `null` снимает подмену: клиент снова собирается по сохранённой
+ * конфигурации агента. Это нужно проверке «диалог идёт по настройкам
+ * менеджера»: подставленный клиент иначе перехватил бы вызов.
+ */
+export function setModelClient(client: ModelClient | null): void {
   activeClient = client;
+  clientOverridden = client !== null;
+}
+
+/**
+ * Подменён ли клиент модели на границе.
+ *
+ * Различать «подменён тестом» и «собран по конфигурации» нужно песочнице:
+ * с подменой песочница считает ответ тестового клиента, без подмены — по
+ * сохранённой конфигурации менеджера.
+ */
+export function hasModelClientOverride(): boolean {
+  return clientOverridden;
 }
 
 /**
  * Клиент модели для боевого пути.
  *
- * Пока клиент не подменён тестом или песочницей, берётся реальный клиент из
- * переменных окружения. Раньше здесь стояла заглушка, и живой вызов модели не
- * происходил вовсе: ответ приходил пустым, а счётчик токенов оставался нулём.
+ * Пока клиент не подменён тестом или песочницей, берётся клиент по
+ * сохранённой конфигурации агента: адрес, модель, системный промпт и
+ * параметры ответа определяет менеджер в кабинете. Если конфигурацию
+ * прочитать не удалось (миграция ещё не применена, база недоступна), берётся
+ * клиент из переменных окружения — поведение стенда не ломается.
  */
 export function getModelClient(): ModelClient {
-  activeClient ??= createDefaultModelClient();
+  activeClient ??= createConfiguredModelClient();
   return activeClient;
+}
+
+/**
+ * Настройки генерации ответа: всё, что задаёт менеджер в кабинете.
+ */
+export type ModelSettings = {
+  provider: string;
+  model: string;
+  endpoint: string;
+  temperature: number;
+  maxTokens: number;
+  systemPrompt: string;
+};
+
+/**
+ * Клиент модели по сохранённой конфигурации агента.
+ *
+ * Адрес и модель берутся из настроек менеджера, ключ — только из переменной
+ * окружения: в конфигурации ключа нет, и в базу, аудит и трассу он не
+ * попадает.
+ *
+ * Лимиты и повтор после 429 — те же, что у боевого клиента: клиент строится
+ * через `createHttpModelClient`, поэтому поведение провайдера (таймаут 120 с,
+ * один повтор через 30 с) не расходится с ядром.
+ */
+export function createModelClientForSettings(
+  settings: ModelSettings,
+  options: {
+    fetchImpl?: typeof fetch;
+    sleep?: (milliseconds: number) => Promise<void>;
+  } = {},
+): ModelClient {
+  const client = createHttpModelClient({
+    baseUrl: settings.endpoint,
+    apiKey: process.env.OPENCODE_API_KEY,
+    model: settings.model,
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+  });
+  return {
+    complete: async (request: ModelRequest): Promise<ModelResult> =>
+      client.complete({
+        ...request,
+        temperature: request.temperature ?? settings.temperature,
+        maxTokens: request.maxTokens ?? settings.maxTokens,
+      }),
+  };
+}
+
+/**
+ * Клиент, который перед каждым вызовом читает сохранённую конфигурацию.
+ *
+ * Конфигурация читается на каждый вызов, а не один раз: версия настройки
+ * меняется менеджером, и следующий диалог должен пойти с новой версией, а
+ * уже открытый — со своей. Версия привязана к диалогу, поэтому внутри
+ * диалога версия не меняется.
+ */
+function createConfiguredModelClient(): ModelClient {
+  return {
+    complete: async (request: ModelRequest): Promise<ModelResult> => {
+      const settings = await resolveSettings(request.sessionId ?? null);
+      if (settings === null) {
+        return createDefaultModelClient().complete(request);
+      }
+      const client = createModelClientForSettings(settings);
+      return client.complete(applySettings(request, settings));
+    },
+  };
+}
+
+/**
+ * Начало системного промпта агента.
+ *
+ * Промпт классификатора начинается иначе, поэтому по началу промпта видно,
+ * какой из двух вызовов модели перед нами: генерацию ответа клиенту или
+ * классификацию намерения. Промпт классификатора менеджер не настраивает:
+ * подменять его сохранённым было бы ошибкой.
+ */
+const AGENT_PROMPT_PREFIX = "Ты — агент службы поддержки";
+
+/**
+ * Настройки для вызова: сохранённый промпт и параметры ответа.
+ *
+ * Параметры ответа применяются ко всем вызовам: они относятся к клиенту
+ * модели, а не к узлу ядра. Системный промпт подменяется только в вызове
+ * генерации ответа.
+ */
+function applySettings(
+  request: ModelRequest,
+  settings: ModelSettings,
+): ModelRequest {
+  const isAgentAnswer = request.messages.some(
+    (message) =>
+      message.role === "system" &&
+      message.content.startsWith(AGENT_PROMPT_PREFIX),
+  );
+  // Сохранённый промпт подменяет системный промпт ядра. Сравнение с
+  // стандартным промптом не делается: текст стандартного промпта живёт в
+  // двух местах и разъехался бы при правке ядра — тогда агент отвечал бы по
+  // устаревшей версии.
+  const overridePrompt = isAgentAnswer && settings.systemPrompt.length > 0;
+  return {
+    ...request,
+    messages: overridePrompt
+      ? request.messages.map((message) =>
+          message.role === "system"
+            ? { ...message, content: settings.systemPrompt }
+            : message,
+        )
+      : request.messages,
+    temperature: request.temperature ?? settings.temperature,
+    maxTokens: request.maxTokens ?? settings.maxTokens,
+  };
+}
+
+/**
+ * Сохранённая конфигурация для диалога.
+ *
+ * Диалог определяется по `sessionId` — это идентификатор диалога, который
+ * ядро и так передаёт провайдеру в заголовке сессии.
+ *
+ * Если конфигурацию прочитать не удалось, возвращается `null`: вызов идёт
+ * с настройками окружения, а не падает.
+ */
+async function resolveSettings(
+  conversationId: string | null,
+): Promise<ModelSettings | null> {
+  if (conversationId === null || conversationId.length === 0) {
+    return null;
+  }
+  try {
+    const { resolveDialogSettings } = await import(
+      "@/modules/agent-settings/dialog"
+    );
+    const settings = await resolveDialogSettings(conversationId);
+    if (settings === null) {
+      return null;
+    }
+    return {
+      provider: settings.provider,
+      model: settings.model,
+      endpoint: settings.endpoint,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+      systemPrompt: settings.systemPrompt,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Клиент по умолчанию из переменных окружения. */
