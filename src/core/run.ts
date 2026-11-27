@@ -26,12 +26,13 @@ import { validateAnswer, validatePromise } from "@/core/validate";
 import {
   candidateFromAnswer,
   extractPromise,
+  promiseSentence,
   stripPromiseMarker,
   type ConfirmedSource,
 } from "@/core/promise-extract";
 import { currentEmbeddingProvider, search } from "@/modules/knowledge";
 import { check, ruleKeyForRequest } from "@/modules/policy";
-import { recordPromise } from "@/modules/promises";
+import { recordPromise, resolveContactEmail } from "@/modules/promises";
 import { recordStep } from "@/modules/telemetry";
 import type { AgentStep } from "@/modules/telemetry";
 
@@ -302,6 +303,32 @@ async function classify(
     costRub: result.costRub,
     model: result.model,
   };
+}
+
+/**
+ * Вопрос клиенту об адресе для веб-канала (ADR-0018).
+ *
+ * Без адреса обещание не создаётся: спрашивать адрес нужно до того, как
+ * клиенту сказано «до <срок>». В вопросе нет ни срока, ни обязательства.
+ */
+const CONTACT_EMAIL_QUESTION = "На какой адрес отправить КП?";
+
+/**
+ * Восстанавливает адрес клиента по метке из текста диалога.
+ *
+ * В веб-канале адрес обязателен для обещания, и он живёт в таблице
+ * соответствий диалога: исходное значение лежит только там. В MAX адрес не
+ * нужен — адресатом является диалог.
+ */
+async function contactEmailFor(
+  channel: "web" | "max",
+  conversationId: string,
+  clientText: string,
+): Promise<string | null> {
+  if (channel === "max") return null;
+  const label = /⟦EMAIL_\d+⟧/u.exec(clientText)?.[0];
+  if (!label) return null;
+  return resolveContactEmail(conversationId, label);
 }
 
 function escalationOutcome(
@@ -878,12 +905,19 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     location: source.location,
   }));
 
-  const candidate = candidateFromAnswer(generatedText, {
+    const candidate = candidateFromAnswer(generatedText, {
     channel: input.channel,
     externalChatId: input.externalChatId,
     clientText: input.text,
-    contactEmail: null,
+    contactEmail: await contactEmailFor(
+      input.channel,
+      input.conversationId,
+      input.text,
+    ),
   }, confirmedSources);
+
+  /** Текст ответа клиенту: маркер заменяется обязательством, сформулированным кодом. */
+  let outgoingText = stripPromiseMarker(generatedText);
 
   if (candidate === null) {
     await pushStep({
@@ -902,6 +936,46 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     const extraction = extractPromise(candidate, confirmedSources);
 
     if (extraction.kind === "rejected") {
+      // В веб-канале без адреса обязательство недопустимо: агент сначала
+      // спрашивает адрес, и до ответа обещание не создаётся (ADR-0018).
+      // Клиент получает вопрос без срока и без обязательств.
+      if (extraction.reason === "contact_email_required" && input.channel === "web") {
+        await pushStep({
+          node: "promise",
+          endpoint: null,
+          tokensIn: 0,
+          tokensOut: 0,
+          costRub: 0,
+          latencyMs: elapsedSince(promiseStartedAt),
+          metadata: {
+            outcome: "rejected",
+            reason: extraction.reason,
+            detail: extraction.detail,
+          },
+          sourceIds: sources.map((source) => source.id),
+          outcome: "respond",
+          model,
+        });
+        await pushStep({
+          node: "respond",
+          endpoint: "POST /agent/respond",
+          tokensIn: 0,
+          tokensOut: 0,
+          costRub: 0,
+          latencyMs: 0,
+          metadata: { delivered: true },
+          sourceIds: sources.map((source) => source.id),
+          outcome: "respond",
+          model,
+        });
+        return {
+          outcome: "respond",
+          answer: { text: CONTACT_EMAIL_QUESTION, sources },
+          escalation: null,
+          steps,
+        };
+      }
+
       await pushStep({
         node: "promise",
         endpoint: null,
@@ -980,10 +1054,15 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       );
     }
 
+    // Текст обязательства формулирует код: в веб-канале адрес подставляется
+    // меткой, в MAX адресатом называется диалог. Один и тот же текст уходит
+    // клиенту и попадает в журнал — менеджер видит ровно то, что пообещали.
+    const promiseText = promiseSentence(promise);
+
     await recordPromise({
       tenantId,
       conversationId: input.conversationId,
-      text: promise.text,
+      text: promiseText,
       dueAt: promise.dueAt,
       owner: promise.owner,
       sourceKind: promise.sourceKind,
@@ -993,6 +1072,10 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       contactLabel: promise.contactLabel,
       externalChatId: promise.externalChatId,
     });
+
+    // Обещание в ответе клиенту формулирует код, а не модель: строка-маркер
+    // заменяется обязательством с подтверждённым сроком.
+    outgoingText = stripPromiseMarker(generatedText, promiseText);
 
     await pushStep({
       node: "promise",
@@ -1033,7 +1116,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     outcome: "respond",
     // Ссылки в текст ответа не попадают: они остаются в `sources`, в трассе
     // и в кабинете менеджера.
-    answer: { text: stripUrls(stripPromiseMarker(generatedText)), sources },
+    answer: { text: stripUrls(outgoingText), sources },
     escalation: null,
     steps,
   };

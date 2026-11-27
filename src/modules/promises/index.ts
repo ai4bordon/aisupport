@@ -1,4 +1,5 @@
 import { getPool } from "@/db/pool";
+import { createMaskMappingStore } from "@/core/mask-store";
 
 /**
  * Публичный API модуля обещаний (docs/api-contract.md §1, §3).
@@ -196,4 +197,24 @@ export async function markPromiseDone(id: string, tenantId: string): Promise<boo
     [id, tenantId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Восстанавливает адрес клиента по метке из таблицы соответствий диалога.
+ *
+ * Адрес — персональные данные: в модель и трассу уходит метка, исходное
+ * значение лежит в `conversation_mask` и подставляется только при фактической
+ * отправке. Здесь значение читается сервером для записи в журнал — там оно и
+ * нужно менеджеру как адресат.
+ *
+ * Если метки в таблице нет, адрес не восстанавливается: подставлять
+ * «похожий» адрес по догадке нельзя.
+ */
+export async function resolveContactEmail(
+  conversationId: string,
+  label: string,
+): Promise<string | null> {
+  const store = createMaskMappingStore(getPool());
+  const mapping = await store.load(conversationId);
+  return mapping[label] ?? null;
 }

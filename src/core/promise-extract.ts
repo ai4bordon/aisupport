@@ -111,12 +111,6 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/u;
 /** Метка адреса в замаскированном тексте. */
 const EMAIL_LABEL_PATTERN = /⟦EMAIL_\d+⟧/u;
 
-/**
- * Непохожий на адрес фрагмент с `@`: клиент мог написать адрес с опечаткой,
- * и такой текст нельзя ни принять как адрес, ни отправить в модель.
- */
-const RAW_EMAIL_PATTERN = /[^\s@,;]+@[^\s@,;]+/u;
-
 /** Строка-маркер обязательства в ответе модели. */
 const PROMISE_MARKER = /(?:^|\n)\s*ОБЕЩАНИЕ\s*:\s*(.+)/u;
 
@@ -216,16 +210,6 @@ function findEmailLabel(...texts: Array<string | null>): string | null {
   return null;
 }
 
-/** Адрес, который клиент написал без маскирования: такому адресу не доверяют. */
-function findRawEmail(...texts: Array<string | null>): string | null {
-  for (const text of texts) {
-    if (!text) continue;
-    const match = RAW_EMAIL_PATTERN.exec(text);
-    if (match) return match[0];
-  }
-  return null;
-}
-
 /** Разобранная строка-маркер обязательства. */
 type PromiseMarker = {
   text: string;
@@ -285,8 +269,12 @@ export function candidateFromAnswer(
   const marker = parsePromiseMarker(answerText);
   if (!marker) return null;
 
+  // Адрес клиента — персональные данные: в модель и трассу уходит метка,
+  // а исходное значение лежит в таблице соответствий и приходит в ядро
+  // отдельно. Сырой адрес из текста не принимается: он не прошёл бы
+  // маскирование и не оказался бы в таблице соответствий.
   const label = findEmailLabel(marker.text, context.clientText);
-  const rawEmail = label ? null : findRawEmail(context.clientText);
+  const contactEmail = context.contactEmail ?? null;
 
   // Номер источника из подсказки промпта превращается в идентификатор
   // подтверждённого источника: модель не может сослаться на источник,
@@ -303,18 +291,57 @@ export function candidateFromAnswer(
     channel: context.channel === "max" ? "max" : "email",
     externalChatId: context.channel === "max" ? context.externalChatId : null,
     contactLabel: label,
-    contactEmail: label ? (context.contactEmail ?? null) : rawEmail,
+    contactEmail,
   };
 }
 
 /**
- * Вырезает строку-маркер обязательства из текста ответа.
+ * Заменяет строку-маркер обязательства в тексте ответа.
  *
  * Клиенту маркер не показывается: это внутренний формат, по которому ядро
- * понимает, что модель взяла обязательство.
+ * понимает, что модель взяла обязательство. На его место ставится
+ * обязательство, сформулированное кодом, — иначе клиент получил бы текст
+ * модели, который может содержать неподтверждённые детали.
  */
-export function stripPromiseMarker(answerText: string): string {
-  return answerText.replace(PROMISE_MARKER, "\n").replace(/\n{3,}/gu, "\n\n").trim();
+export function stripPromiseMarker(answerText: string, replacement = ""): string {
+  const stripped = answerText
+    .replace(PROMISE_MARKER, replacement.length > 0 ? `\n${replacement}` : "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+  return stripped;
+}
+
+/**
+ * Дата срока в виде, понятном клиенту: `27.11.2026`.
+ *
+ * Формат выбран один и тот же для обоих каналов: клиент и менеджер должны
+ * видеть один и тот же срок, а не разные записи одного момента времени.
+ */
+export function formatDueDate(dueAt: string): string {
+  const date = new Date(dueAt);
+  if (Number.isNaN(date.getTime())) return dueAt;
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${day}.${month}.${date.getUTCFullYear()}`;
+}
+
+/**
+ * Текст обязательства для клиента.
+ *
+ * Формулировку задаёт код, а не модель: в веб-канале адрес подставляется
+ * меткой (`⟦EMAIL_1⟧`), в MAX адресатом называется диалог. Один и тот же
+ * текст уходит клиенту и попадает в журнал — менеджер видит ровно то, что
+ * пообещали.
+ */
+export function promiseSentence(
+  promise: Pick<ExtractedPromise, "channel" | "contactLabel" | "dueAt">,
+): string {
+  const due = formatDueDate(promise.dueAt);
+  if (promise.channel === "email") {
+    const contact = promise.contactLabel ?? "указанный адрес";
+    return `Счёт будет отправлен на ${contact} до ${due}`;
+  }
+  return `КП будет готово до ${due}, пришлю сюда`;
 }
 
 function rejected(reason: PromiseRejectionReason, detail: string): PromiseExtraction {

@@ -129,7 +129,11 @@ describe("неподтверждённый срок ведёт к эскалац
     );
 
     expect(promises.rows).toHaveLength(1);
-    expect(promises.rows[0]?.text).toContain("Пришлю счёт");
+    // Текст обязательства формулирует код: срок подтверждён источником,
+    // адресат в MAX — диалог.
+    expect(promises.rows[0]?.text).toBe(
+      "КП будет готово до 27.11.2026, пришлю сюда",
+    );
     expect(promises.rows[0]?.owner).toBe("manager");
     expect(promises.rows[0]?.status).toBe("open");
     expect(promises.rows[0]?.source_kind).toBe("kb_article");
