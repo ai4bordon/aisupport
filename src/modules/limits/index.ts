@@ -72,15 +72,25 @@ function secondsUntil(target: Date): number {
 /**
  * Проверка лимита запросов: 10 запросов в минуту на IP.
  *
- * Окно — календарная минута, ключ — отпечаток IP. Решение принимается
+ * Окно — календарная минута, ключ — отпечаток адреса. Решение принимается
  * после атомарного увеличения счётчика, поэтому конкурентные запросы
  * с одного IP не проходят лимит.
+ *
+ * `clientKey` — то, чем клиент опознаётся для лимита: обычно его адрес.
+ * Кто именно считается клиентом, решает барьер доступа
+ * (`src/modules/access/client-ip.ts`): без подтверждённого обратного
+ * прокси адрес из заголовка подделать можно, поэтому там ключом служит
+ * подписанная сессия, а не заголовок.
  */
-export async function checkRateLimit(ip: string): Promise<RateLimitDecision> {
+export async function checkRateLimit(clientKey: string): Promise<RateLimitDecision> {
   const limit = requestsPerMinute();
   const now = new Date();
   const windowStart = minuteWindowStart(now);
-  const counter = await incrementCounter("requests_minute", ipBucketKey(ip), windowStart);
+  const counter = await incrementCounter(
+    "requests_minute",
+    ipBucketKey(clientKey),
+    windowStart,
+  );
 
   if (counter <= limit) {
     return { allowed: true, reason: "ok", retryAfterSeconds: null, limit };
