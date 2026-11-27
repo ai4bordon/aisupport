@@ -158,3 +158,60 @@ export function validateOutgoingText(
     ],
   };
 }
+
+/**
+ * Обязательство, проверяемое перед записью в журнал (R11, ADR-0018).
+ *
+ * `deadlinePhrase` — формулировка срока так, как она написана в источнике:
+ * именно она должна дословно в нём найтись.
+ */
+export type PromiseCheck = {
+  text: string;
+  deadlinePhrase: string;
+};
+
+/**
+ * Проверка обязательства перед записью в журнал.
+ *
+ * Инварианты:
+ * - формулировка срока обязана встречаться в тексте подтверждённого
+ *   источника: обязательство без источника недопустимо;
+ * - в тексте обязательства не должно быть сырых персональных данных: адрес
+ *   клиента уходит в модель и трассу меткой, а не исходным значением.
+ *
+ * Проверка идёт по факту, а не по намерению: модель могла назвать срок,
+ * которого в источнике нет, и код это не пропускает.
+ */
+export function validatePromise(
+  promise: PromiseCheck,
+  sources: readonly Source[],
+  allowedPersonalValues: readonly string[] = [],
+): ValidationResult {
+  const violations: ValidationViolation[] = [];
+
+  const normalizedPhrase = normalizeText(promise.deadlinePhrase);
+  const confirmed = sources.some((source) =>
+    normalizeText(source.text).includes(normalizedPhrase),
+  );
+  if (!confirmed) {
+    violations.push({
+      code: "deadline_not_in_source",
+      detail: `Срок «${promise.deadlinePhrase}» отсутствует в подтверждённых источниках.`,
+    });
+  }
+
+  const knownValues = new Set(
+    allowedPersonalValues.map((value) => value.toLowerCase()),
+  );
+  const leaked = findRawPersonalDataValues(promise.text).filter(
+    (value) => !knownValues.has(value.toLowerCase()),
+  );
+  if (leaked.length > 0) {
+    violations.push({
+      code: "raw_pii_in_outgoing",
+      detail: `В тексте обязательства остались необработанные персональные данные: ${leaked.join(", ")}.`,
+    });
+  }
+
+  return { valid: violations.length === 0, violations };
+}

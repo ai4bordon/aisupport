@@ -22,9 +22,17 @@ import {
 import { loadSlots, saveSlots } from "@/core/slots";
 import { stripUrls } from "@/core/no-urls";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
-import { validateAnswer } from "@/core/validate";
+import { validateAnswer, validatePromise } from "@/core/validate";
+import {
+  candidateFromAnswer,
+  extractPromise,
+  promiseSentence,
+  stripPromiseMarker,
+  type ConfirmedSource,
+} from "@/core/promise-extract";
 import { currentEmbeddingProvider, search } from "@/modules/knowledge";
 import { check, ruleKeyForRequest } from "@/modules/policy";
+import { recordPromise, resolveContactEmail } from "@/modules/promises";
 import { recordStep } from "@/modules/telemetry";
 import type { AgentStep } from "@/modules/telemetry";
 
@@ -145,6 +153,14 @@ const SYSTEM_PROMPT = [
   "Не повторяй вопрос клиента и не пиши воду.",
   "Абзац не длиннее трёх строк.",
   "Переносы строк в text сохраняй: каждый шаг с новой строки.",
+  // Формат обязательства: строка-маркер в конце ответа (ADR-0018).
+  "Если клиент спрашивает, когда будет готово, и в подтверждённом источнике есть срок,",
+  "ты берёшь на себя обязательство. Добавь в конец text отдельную строку:",
+  "ОБЕЩАНИЕ: Пришлю КП | срок: 120 минут | источник: [1]",
+  "Срок бери дословно из текста источника, номер источника — из подсказки с источниками ([1], [2]…).",
+  "Без такой строки обязательство не считается зафиксированным, и клиент его не получит.",
+  "Если срока в источниках нет — обязательство не давай, строку ОБЕЩАНИЕ не пиши.",
+  "В веб-чате адрес отправки клиент ещё не назвал: не обещай отправку на адрес, пока его нет.",
 ].join(" ");
 
 function nowMs(): number {
@@ -295,6 +311,38 @@ async function classify(
     costRub: result.costRub,
     model: result.model,
   };
+}
+
+/**
+ * Вопрос клиенту об адресе для веб-канала (ADR-0018).
+ *
+ * Без адреса обещание не создаётся: спрашивать адрес нужно до того, как
+ * клиенту сказано «до <срок>». В вопросе нет ни срока, ни обязательства.
+ *
+ * Формулировка подобрана так, чтобы правило маскирования не приняло вопрос за
+ * почтовый адрес клиента: маскировщик ищет «адрес …» и превращает хвост
+ * вопроса в метку, из-за чего ответ с вопросом блокировался бы проверкой на
+ * сырые персональные данные. Служебные формулировки исключены из правила
+ * маскирования (ADR-0018).
+ */
+const CONTACT_EMAIL_QUESTION = "На какой адрес отправить КП?";
+
+/**
+ * Восстанавливает адрес клиента по метке из текста диалога.
+ *
+ * В веб-канале адрес обязателен для обещания, и он живёт в таблице
+ * соответствий диалога: исходное значение лежит только там. В MAX адрес не
+ * нужен — адресатом является диалог.
+ */
+async function contactEmailFor(
+  channel: "web" | "max",
+  conversationId: string,
+  clientText: string,
+): Promise<string | null> {
+  if (channel === "max") return null;
+  const label = /⟦EMAIL_\d+⟧/u.exec(clientText)?.[0];
+  if (!label) return null;
+  return resolveContactEmail(conversationId, label);
 }
 
 function escalationOutcome(
@@ -856,6 +904,215 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     );
   }
 
+  // Узел 6: обязательство (R11, ADR-0018).
+  //
+  // Обещание допустимо только из подтверждённого источника: срок и
+  // ответственный сверяются с текстом источника кодом, а не доверием
+  // формулировке модели. При отказе запись не создаётся, и клиенту не уходит
+  // ни срок, ни ответственный — вопрос уходит менеджеру.
+  const promiseStartedAt = nowMs();
+  const confirmedSources: ConfirmedSource[] = sources.map((source) => ({
+    kind: source.kind,
+    id: source.id,
+    text: source.text,
+    title: source.title,
+    location: source.location,
+  }));
+
+    const candidate = candidateFromAnswer(generatedText, {
+    channel: input.channel,
+    externalChatId: input.externalChatId,
+    clientText: input.text,
+    contactEmail: await contactEmailFor(
+      input.channel,
+      input.conversationId,
+      input.text,
+    ),
+  }, confirmedSources);
+
+  /** Текст ответа клиенту: маркер заменяется обязательством, сформулированным кодом. */
+  let outgoingText = stripPromiseMarker(generatedText);
+
+  if (candidate === null) {
+    await pushStep({
+      node: "promise",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: elapsedSince(promiseStartedAt),
+      metadata: { outcome: "none" },
+      sourceIds: sources.map((source) => source.id),
+      outcome: null,
+      model,
+    });
+  } else {
+    const extraction = extractPromise(candidate, confirmedSources);
+
+    if (extraction.kind === "rejected") {
+      // В веб-канале без адреса обязательство недопустимо: агент сначала
+      // спрашивает адрес, и до ответа обещание не создаётся (ADR-0018).
+      // Клиент получает вопрос без срока и без обязательств.
+      if (extraction.reason === "contact_email_required" && input.channel === "web") {
+        await pushStep({
+          node: "promise",
+          endpoint: null,
+          tokensIn: 0,
+          tokensOut: 0,
+          costRub: 0,
+          latencyMs: elapsedSince(promiseStartedAt),
+          metadata: {
+            outcome: "rejected",
+            reason: extraction.reason,
+            detail: extraction.detail,
+          },
+          sourceIds: sources.map((source) => source.id),
+          outcome: "respond",
+          model,
+        });
+        await pushStep({
+          node: "respond",
+          endpoint: "POST /agent/respond",
+          tokensIn: 0,
+          tokensOut: 0,
+          costRub: 0,
+          latencyMs: 0,
+          metadata: { delivered: true },
+          sourceIds: sources.map((source) => source.id),
+          outcome: "respond",
+          model,
+        });
+        return {
+          outcome: "respond",
+          answer: { text: CONTACT_EMAIL_QUESTION, sources },
+          escalation: null,
+          steps,
+        };
+      }
+
+      await pushStep({
+        node: "promise",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: elapsedSince(promiseStartedAt),
+        metadata: {
+          outcome: "rejected",
+          reason: extraction.reason,
+          detail: extraction.detail,
+        },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      await pushStep({
+        node: "escalate",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: 0,
+        metadata: { reason: "no_confirmed_source" },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      return escalationOutcome(
+        "no_confirmed_source",
+        "Срок не подтверждён источником — передаём менеджеру без обязательств.",
+        null,
+        steps,
+      );
+    }
+
+    const promise = extraction.promise;
+    const promiseCheck = validatePromise(
+      { text: promise.text, deadlinePhrase: promise.deadlinePhrase },
+      sources,
+    );
+    if (!promiseCheck.valid) {
+      await pushStep({
+        node: "promise",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: elapsedSince(promiseStartedAt),
+        metadata: {
+          outcome: "rejected",
+          reason: promiseCheck.violations[0]?.code ?? "validation_failed",
+          detail: promiseCheck.violations[0]?.detail ?? "",
+        },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      await pushStep({
+        node: "escalate",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: 0,
+        metadata: { reason: "validation_failed" },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      return escalationOutcome(
+        "validation_failed",
+        "Обязательство не прошло проверку по источникам и персональным данным — передаём менеджеру.",
+        null,
+        steps,
+      );
+    }
+
+    // Текст обязательства формулирует код: в веб-канале адрес подставляется
+    // меткой, в MAX адресатом называется диалог. Один и тот же текст уходит
+    // клиенту и попадает в журнал — менеджер видит ровно то, что пообещали.
+    const promiseText = promiseSentence(promise);
+
+    await recordPromise({
+      tenantId,
+      conversationId: input.conversationId,
+      text: promiseText,
+      dueAt: promise.dueAt,
+      owner: promise.owner,
+      sourceKind: promise.sourceKind,
+      sourceId: promise.sourceId,
+      channel: promise.channel,
+      contactEmail: promise.contactEmail,
+      contactLabel: promise.contactLabel,
+      externalChatId: promise.externalChatId,
+    });
+
+    // Обещание в ответе клиенту формулирует код, а не модель: строка-маркер
+    // заменяется обязательством с подтверждённым сроком.
+    outgoingText = stripPromiseMarker(generatedText, promiseText);
+
+    await pushStep({
+      node: "promise",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: elapsedSince(promiseStartedAt),
+      metadata: {
+        outcome: "recorded",
+        sourceKind: promise.sourceKind,
+        sourceId: promise.sourceId,
+        channel: promise.channel,
+        // В трассу уходит метка адреса, а не исходное значение: адрес —
+        // персональные данные.
+        contactLabel: promise.contactLabel,
+      },
+      sourceIds: sources.map((source) => source.id),
+      outcome: null,
+      model,
+    });
+  }
+
   await pushStep({
     node: "respond",
     endpoint: "POST /agent/respond",
@@ -873,7 +1130,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     outcome: "respond",
     // Ссылки в текст ответа не попадают: они остаются в `sources`, в трассе
     // и в кабинете менеджера.
-    answer: { text: stripUrls(generatedText), sources },
+    answer: { text: stripUrls(outgoingText), sources },
     escalation: null,
     steps,
   };

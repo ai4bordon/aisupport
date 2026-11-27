@@ -223,6 +223,15 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Соответствия меток сохраняются в таблице соответствий диалога: без них
+  // исходные значения меток негде взять, и адрес клиента не восстановить.
+  // В MAX это делает воркер через порт маскирования; веб-чат обязан сохранить
+  // соответствия сам, иначе обещание в веб-канале невозможно — адрес
+  // обязателен, а восстановить его не из чего.
+  if (masked.maskedFieldsCount > 0) {
+    await saveMaskScope(pool, conversationId, masked.mapping);
+  }
+
   await pool.query(
     `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
      VALUES ($1, $2, $3, 'client', $4, $5, '[]'::jsonb)
@@ -486,6 +495,31 @@ async function loadMaskScope(
     }
   }
   return { mapping };
+}
+
+/**
+ * Сохраняет соответствия меток диалога.
+ *
+ * Исходные значения меток лежат только здесь: в таблицу соответствий
+ * диалога, отдельно от текстов сообщений. В модель и трассу они не
+ * попадают.
+ */
+async function saveMaskScope(
+  pool: Pool,
+  conversationId: string,
+  mapping: Record<string, string>,
+): Promise<void> {
+  for (const [label, value] of Object.entries(mapping)) {
+    // Метка без значения — это метка из маскированного текста, исходного
+    // значения за ней нет: такие метки нечего сохранять.
+    if (value === label) continue;
+    await pool.query(
+      `INSERT INTO conversation_mask (conversation_id, label, value)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (conversation_id, label) DO NOTHING`,
+      [conversationId, label, value],
+    );
+  }
 }
 
 /**
