@@ -100,6 +100,9 @@ async function main() {
         draft: record.result,
         sources: record.sources,
         traceRef: record.traceRef,
+        // Любая запись из этого порта пришла из режима тени: клиенту ответ не
+        // отправлен. Причина исходной эскалации при этом не переписывается.
+        isShadow: true,
       }),
     logger,
   });

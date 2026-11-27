@@ -5,7 +5,7 @@
 // Доказательство отсутствия отправки — счётчик вызовов заглушки, а не
 // отсутствие видимого текста.
 //
-// Запуск: DATABASE_URL=... MAX_BOT_TOKEN=... node live/shadow-max.mjs
+// Запуск: DATABASE_URL=... MAX_BOT_TOKEN=... node scripts/live/shadow-max.mjs
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";

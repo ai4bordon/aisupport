@@ -67,6 +67,15 @@ export type ManagerQueueInput = {
   sources: ShadowSource[];
   /** Безопасная ссылка на трассу: идентификатор диалога. */
   traceRef: string;
+  /**
+   * Признак теневой записи: результат сохранён режимом тени и клиенту не
+   * отправлен.
+   *
+   * Отдельный признак, а не значение причины: причина исходной эскалации
+   * нужна менеджеру сама по себе, а менеджер должен ещё видеть, что запись
+   * пришла из режима тени, а не из обычной эскалации.
+   */
+  isShadow?: boolean;
 };
 
 /**
@@ -111,6 +120,10 @@ export async function recordShadowDraft(
     ...input,
     reason: SHADOW_REASON,
     draft: input.result,
+    // Признак тени ставится здесь, а не выводится из причины: запись с
+    // исходной причиной эскалации тоже пришла из режима тени, но её причина
+    // остаётся настоящей.
+    isShadow: true,
   });
 }
 
@@ -135,9 +148,9 @@ export async function recordManagerQueue(
   const result = await pool.query(
     `INSERT INTO escalations (
        tenant_id, conversation_id, reason, summary, draft, result,
-       sources, channel, trace_ref, status
+       sources, channel, trace_ref, status, is_shadow
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'open')
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'open', $10)
      RETURNING id`,
     [
       input.tenantId,
@@ -149,6 +162,7 @@ export async function recordManagerQueue(
       JSON.stringify(sources),
       input.channel,
       input.traceRef,
+      input.isShadow === true,
     ],
   );
 

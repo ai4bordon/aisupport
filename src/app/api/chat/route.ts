@@ -407,6 +407,10 @@ export async function POST(request: Request): Promise<Response> {
           draft: outcome.escalation.draft,
           sources: [],
           traceRef: conversationId,
+          // Причина исходной эскалации не переписывается, но признак тени
+          // ставится: менеджер должен видеть, что запись пришла из режима тени,
+          // а не из обычной эскалации.
+          isShadow: shadowMode,
         })
       : null;
 

@@ -3,7 +3,7 @@
 // получает, а в очереди менеджера появляется запись с каналом, диалогом,
 // причиной, результатом и безопасной ссылкой на трассу.
 //
-// Запуск: DATABASE_URL=... node live/shadow-web-chat.mjs
+// Запуск: DATABASE_URL=... node scripts/live/shadow-web-chat.mjs
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 

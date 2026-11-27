@@ -194,6 +194,7 @@ describe("режим тени: запись очереди менеджера", 
       reason: string;
       result: string;
       trace_ref: string;
+      is_shadow: boolean;
     }>("SELECT * FROM escalations WHERE id = $1", [id]);
 
     const record = row.rows[0];
@@ -202,6 +203,9 @@ describe("режим тени: запись очереди менеджера", 
     expect(record?.reason).toBe("shadow_mode");
     expect(record?.result).not.toBe("");
     expect(record?.trace_ref).toBe(conversationId);
+    // Признак тени виден менеджеру отдельным полем: запись из режима тени не
+    // должна выглядеть как обычная эскалация.
+    expect(record?.is_shadow).toBe(true);
 
     // Ссылка на трассу указывает на существующий диалог.
     const trace = await testPool().query<{ count: string }>(
