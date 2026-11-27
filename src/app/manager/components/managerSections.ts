@@ -41,7 +41,7 @@ export const MANAGER_SECTIONS: ManagerSection[] = [
     label: "Очередь",
     href: "/manager/queue",
     anchor: "section-queue",
-    status: "in-progress",
+    status: "ready",
     summary: "Обращения, которые требуют менеджера, и обещания клиенту.",
   },
   {
