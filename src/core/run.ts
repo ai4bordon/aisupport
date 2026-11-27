@@ -575,7 +575,10 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       "retrieve",
     );
     sources = results.map((result) => ({
-      kind: result.articleId ? ("kb_article" as const) : ("kb_document" as const),
+      // Тип источника берётся из результата поиска: по одному лишь факту
+      // наличия идентификатора отличить статью от документа нельзя — он
+      // есть у обоих.
+      kind: result.kind,
       id: result.articleId,
       title: result.title,
       location: result.location,

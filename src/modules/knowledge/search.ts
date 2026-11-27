@@ -22,6 +22,22 @@ export type SearchResult = {
 };
 
 /**
+ * Условие допуска к выдаче.
+ *
+ * Allowlist один на обе ветви выдачи — векторную и полнотекстовую. Раздельные
+ * условия расходились бы при правке: в одной ветке можно было бы забыть
+ * закрыть `pending` и выдать ожидающий материал. `pending`, `error`,
+ * `rejected` и `draft` не проходят никогда — их нельзя раскрыть и прямыми
+ * параметрами запроса: публичный `search` таких параметров не принимает.
+ */
+const PUBLISHED_SOURCE_PREDICATE = `
+  (
+    (c.article_id IS NOT NULL AND a.status = 'published')
+    OR (c.document_id IS NOT NULL AND d.status = 'published')
+  )
+`;
+
+/**
  * Провайдер эмбеддингов — граница, на которой подменяется внешний API.
  */
 export type EmbeddingProvider = {
@@ -310,10 +326,7 @@ export async function search(
     LEFT JOIN kb_documents d ON d.id = c.document_id
     WHERE c.tenant_id = $1
       AND c.embedding_model = $5
-      AND (
-        (c.article_id IS NOT NULL AND a.status = 'published')
-        OR (c.document_id IS NOT NULL AND d.status = 'published')
-      )
+      AND ${PUBLISHED_SOURCE_PREDICATE}
       AND 1 - (c.embedding <=> $2::vector) >= $4
     ORDER BY c.embedding <=> $2::vector
     LIMIT $3
@@ -355,10 +368,7 @@ export async function search(
       LEFT JOIN kb_documents d ON d.id = c.document_id
       WHERE c.tenant_id = $1
         AND c.search_vector @@ to_tsquery('russian', $2)
-        AND (
-          (c.article_id IS NOT NULL AND a.status = 'published')
-          OR (c.document_id IS NOT NULL AND d.status = 'published')
-        )
+        AND ${PUBLISHED_SOURCE_PREDICATE}
       ORDER BY score DESC
       LIMIT $3
       `,
