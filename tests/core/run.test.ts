@@ -154,7 +154,13 @@ describe("ядро агента", () => {
     expect(outcome.outcome).toBe("respond");
     if (outcome.outcome !== "respond") return;
     expect(outcome.escalation).toBeNull();
-    expect(outcome.answer.text).toContain("нет ответа");
+    // Клиенту сообщается об отсутствии точного ответа и задаётся один
+    // уточняющий вопрос. Внутренние термины в тексте не упоминаются:
+    // где именно агент искал ответ, клиенту знать не нужно.
+    expect(outcome.answer.text).toContain("нет точного ответа");
+    expect(outcome.answer.text).toContain("Уточните");
+    expect(outcome.answer.text).not.toMatch(/источник/i);
+    expect(outcome.answer.text).not.toMatch(/баз[ае] знаний/i);
     // Ответ из памяти модели не попадает в ответ клиенту.
     expect(outcome.answer.text).not.toContain("Ответ из памяти модели");
   });
