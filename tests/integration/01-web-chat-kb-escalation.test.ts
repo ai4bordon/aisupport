@@ -400,7 +400,14 @@ describe("интеграционная проверка среза 01", () => {
 
     const body = (await response.json()) as ChatBody;
     const serialized = JSON.stringify(body);
-    expect(serialized).not.toContain("Отсрочка платежа");
+    // Проверяется материал, а не совпадение слов: «Отсрочка платежа» —
+    // и вопрос клиента, и формулировка правила полномочий. Уникальный
+    // фрагмент неодобренного материала — «по письменному согласованию».
+    expect(serialized).not.toContain("по письменному согласованию");
     expect(serialized).not.toContain("ждёт одобрения");
+
+    // Вопрос про отсрочку уходит менеджеру: проверка полномочий стоит
+    // до ответов по каталогу и по «нет источника» (ADR-0019).
+    expect(body.escalation?.reason).toBe("policy_denied");
   });
 });
