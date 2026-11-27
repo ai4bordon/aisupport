@@ -370,6 +370,86 @@ function escalationOutcome(
 /**
  * Запуск агентного цикла для нормализованного сообщения.
  */
+/**
+ * Классы, для которых проверка полномочий не применяется.
+ *
+ * Приветствие, сведения о продукте и справка не содержат коммерческих
+ * условий, поэтому правила скидки, отсрочки и возврата к ним неотносятся.
+ * Остальные классы проверяются: условия нельзя обещать без правил, даже
+ * если вопрос попал в каталог или в базу знаний.
+ */
+const POLICY_EXEMPT_INTENTS: ReadonlySet<IntentClass> = new Set([
+  "greeting",
+  "self_info",
+  "howto",
+  "company_info",
+]);
+
+/**
+ * Узел 3: проверка полномочий.
+ *
+ * Проверка идёт ДО ответов по каталогу и по «нет источника»: вопрос об
+ * условиях по позиции каталога или по неопубликованной статье тоже может
+ * содержать просьбу о скидке, отсрочке или возврате, и без проверки такой
+ * вопрос уходил бы клиенту вместе со списком позиций (ADR-0019).
+ */
+async function checkPolicy(
+  input: NormalizedMessage,
+  intent: IntentClass,
+  tenantId: string,
+  pushStep: (step: Omit<AgentStep, "conversationId">) => Promise<void>,
+  sourceIds: string[],
+): Promise<{ allowed: boolean; reason: string | null }> {
+  const policyStartedAt = nowMs();
+  const ruleKey = POLICY_EXEMPT_INTENTS.has(intent)
+    ? null
+    : ruleKeyForRequest(input.text);
+  // Процент скидки нужен, чтобы отличить «до 5%» от «10%»: разрешающее
+  // правило без порога пропустило бы и то, и другое (ADR-0019).
+  const percent = ruleKey === "discount_request" ? requestedPercent(input.text) : null;
+  let policyAllowed = true;
+  let policyReason: string | null = null;
+  if (ruleKey) {
+    try {
+      const decision = await check({ text: input.text, ruleKey, percent }, tenantId);
+      policyAllowed = decision.allowed;
+      policyReason = decision.reason;
+    } catch {
+      policyAllowed = false;
+      policyReason = "Проверка полномочий недоступна.";
+    }
+  }
+  await pushStep({
+    node: "policy",
+    endpoint: "POST /policy/check",
+    tokensIn: 0,
+    tokensOut: 0,
+    costRub: 0,
+    latencyMs: elapsedSince(policyStartedAt),
+    metadata: { ruleKey, allowed: policyAllowed, percent },
+    sourceIds: [],
+    outcome: policyAllowed ? null : "escalate",
+    model: null,
+  });
+
+  if (!policyAllowed) {
+    await pushStep({
+      node: "escalate",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: 0,
+      metadata: { reason: "policy_denied" },
+      sourceIds,
+      outcome: "escalate",
+      model: null,
+    });
+  }
+
+  return { allowed: policyAllowed, reason: policyReason };
+}
+
 export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> {
   const steps: AgentStep[] = [];
   const tenantId = input.tenantId;
@@ -631,6 +711,28 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     );
   }
 
+  // Узел 3: проверка полномочий.
+  //
+  // Проверка идёт до ответов по каталогу и по «нет источника»: вопрос об
+  // условиях по позиции каталога или по неопубликованной статье тоже может
+  // содержать просьбу о скидке, отсрочке или возврате. Без проверки такой
+  // вопрос уходил бы клиенту вместе со списком позиций (ADR-0019).
+  const policy = await checkPolicy(
+    input,
+    intent,
+    tenantId,
+    pushStep,
+    sources.map((source) => source.id),
+  );
+  if (!policy.allowed) {
+    return escalationOutcome(
+      "policy_denied",
+      policy.reason ?? "Условия вне полномочий агента — передаём менеджеру.",
+      null,
+      steps,
+    );
+  }
+
   // Каталог дал позиции: клиент назвал продукт (R1a) или описывает задачу
   // (R1b). Ответ строится кодом по карточке — цена из снимка фида, а не из
   // ответа модели.
@@ -738,58 +840,6 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     return escalationOutcome(
       "no_confirmed_source",
       `В базе знаний нет опубликованного источника по запросу клиента.`,
-      null,
-      steps,
-    );
-  }
-
-  // Узел 3: проверка полномочий.
-  const policyStartedAt = nowMs();
-  const ruleKey = ruleKeyForRequest(input.text);
-  // Процент скидки нужен, чтобы отличить «до 5%» от «10%»: разрешающее
-  // правило без порога пропустило бы и то, и другое (ADR-0019).
-  const percent = ruleKey === "discount_request" ? requestedPercent(input.text) : null;
-  let policyAllowed = true;
-  let policyReason: string | null = null;
-  if (ruleKey) {
-    try {
-      const decision = await check({ text: input.text, ruleKey, percent }, tenantId);
-      policyAllowed = decision.allowed;
-      policyReason = decision.reason;
-    } catch {
-      policyAllowed = false;
-      policyReason = "Проверка полномочий недоступна.";
-    }
-  }
-  await pushStep({
-    node: "policy",
-    endpoint: "POST /policy/check",
-    tokensIn: 0,
-    tokensOut: 0,
-    costRub: 0,
-    latencyMs: elapsedSince(policyStartedAt),
-    metadata: { ruleKey, allowed: policyAllowed, percent },
-    sourceIds: [],
-    outcome: policyAllowed ? null : "escalate",
-    model: null,
-  });
-
-  if (!policyAllowed) {
-    await pushStep({
-      node: "escalate",
-      endpoint: null,
-      tokensIn: 0,
-      tokensOut: 0,
-      costRub: 0,
-      latencyMs: 0,
-      metadata: { reason: "policy_denied" },
-      sourceIds: sources.map((source) => source.id),
-      outcome: "escalate",
-      model: null,
-    });
-    return escalationOutcome(
-      "policy_denied",
-      policyReason ?? "Условия вне полномочий агента — передаём менеджеру.",
       null,
       steps,
     );
