@@ -241,6 +241,12 @@ const DEADLINE_HINT =
   /\b\d{1,2}\.\d{1,2}\.\d{4}\b|\b\d+\s*(?:минут\w*|час\w*|дн\w*|день\w*|недел\w*|месяц\w*)/iu;
 
 /**
+ * Та же грамматика срока, но с глобальным флагом: `matchAll` требует
+ * глобальное выражение, иначе бросает `TypeError`.
+ */
+const DEADLINE_HINT_GLOBAL = new RegExp(DEADLINE_HINT.source, "giu");
+
+/**
  * Граница предложения.
  *
  * Знак препинания не разделяет предложение, если с обеих сторон цифры:
@@ -249,6 +255,23 @@ const DEADLINE_HINT =
  * остаётся: после неё цифры нет.
  */
 const SENTENCE_BOUNDARY = /(?<!\d)[.;!?]+(?!\d)|\n/u;
+
+/**
+ * Все формулировки срока, названные в тексте.
+ *
+ * Текст обязательства уходит клиенту вместе с формулировкой модели (C18),
+ * поэтому каждый названный в нём срок должен подтверждаться источником:
+ * неподтверждённый срок в тексте обязательства — это обещание, которого
+ * нет в источнике.
+ */
+function findDeadlinesInText(text: string): string[] {
+  const found: string[] = [];
+  for (const match of text.matchAll(DEADLINE_HINT_GLOBAL)) {
+    const phrase = match[0].trim();
+    if (phrase.length > 0) found.push(phrase);
+  }
+  return found;
+}
 
 /**
  * Обязательство, найденное в тексте ответа без строки-маркера.
@@ -781,6 +804,19 @@ export function extractPromise(
       "deadline_not_in_source",
       `Срок «${deadline.phrase}» не встречается в тексте подтверждённого источника.`,
     );
+  }
+
+  // Формулировка модели уходит клиенту вместе с подтверждённым сроком
+  // (C18), поэтому каждый срок, названный в тексте обязательства, должен
+  // подтверждаться тем же источником. Иначе модель дописала бы в
+  // обязательство свой, неподтверждённый срок — и он ушёл бы клиенту.
+  for (const mentioned of findDeadlinesInText(candidate.text)) {
+    if (!containsPhrase(source.text, mentioned)) {
+      return rejected(
+        "deadline_not_in_source",
+        `Срок «${mentioned}» из текста обязательства не встречается в тексте подтверждённого источника.`,
+      );
+    }
   }
 
   if (candidate.channel === "email") {

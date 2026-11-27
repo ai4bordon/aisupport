@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  candidateFromAnswer,
+  extractPromise,
   findCommitments,
   findUnmarkedCommitment,
   promiseSentence,
   stripPromiseMarker,
   unconfirmedCommitmentRejection,
+  type ConfirmedSource,
 } from "@/core/promise-extract";
 
 /**
@@ -173,6 +176,30 @@ describe("C18: формулировка модели сохраняется в �
 
     expect(sentence.match(/120 минут/gu)).toHaveLength(1);
     expect(sentence).not.toContain("12.03.2026");
+  });
+
+  it("неподтверждённый срок в формулировке модели не проходит в обещание", () => {
+    // Формулировка модели уходит клиенту вместе с подтверждённым сроком,
+    // поэтому срок, названный в ней, должен подтверждаться источником.
+    const sources: ConfirmedSource[] = [
+      {
+        kind: "kb_article",
+        id: "article-1",
+        text: "Электронная лицензия предоставляется в течение 120 минут после оплаты.",
+      },
+    ];
+    const candidate = candidateFromAnswer(
+      "ОБЕЩАНИЕ: Пришлю счёт в течение 120 минут, но не позднее 15 минут | срок: 120 минут | источник: [1]",
+      { channel: "max", externalChatId: "chat-1", clientText: null },
+      sources,
+    );
+
+    expect(candidate).not.toBeNull();
+    const extraction = extractPromise(candidate!, sources);
+
+    expect(extraction.kind).toBe("rejected");
+    if (extraction.kind !== "rejected") return;
+    expect(extraction.reason).toBe("deadline_not_in_source");
   });
 });
 
