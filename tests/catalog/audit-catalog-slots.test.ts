@@ -160,7 +160,10 @@ function countQueries(pool: { query: unknown }, pattern: RegExp): () => number {
   pool.query = ((...args: unknown[]) => {
     const sql = String(args[0] ?? "");
     if (pattern.test(sql)) counter += 1;
-    return (original as (...rest: unknown[]) => unknown)(...args);
+    // Оригинал вызывается с тем же `this`, что и при обычном обращении:
+    // метод пула держит состояние соединения, и вызов без контекста роняет
+    // его на чтении `this.Promise`.
+    return (original as (...rest: unknown[]) => unknown).apply(pool, args);
   }) as unknown;
   return () => counter;
 }
