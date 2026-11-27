@@ -220,7 +220,7 @@ type RenderedDocument = {
   "message_id": "uuid",
   "outcome": "respond",
   "answer": {
-    "text": "Подтверждённый ответ со ссылкой на источник",
+    "text": "Подтверждённый ответ без URL в клиентском тексте",
     "sources": [
       {
         "kind": "kb_article",
@@ -238,6 +238,8 @@ type RenderedDocument = {
   }
 }
 ```
+
+`answer.sources` содержит источники ответа и их безопасные метаданные/ссылки для трассы и кабинета менеджера; `answer.text` в Web/MAX не содержит URL.
 
 Допустимые `outcome`: `respond`, `escalate`.
 
