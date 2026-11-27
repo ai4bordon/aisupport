@@ -1,0 +1,195 @@
+/* Раздел кабинета менеджера «Песочница и история» — фирменный стиль Softline
+   (R26, ADR-0012). Своих цветов нет: только переменные из
+   src/app/styles/tokens.css. */
+
+.sandbox-page {
+  min-height: 100%;
+  padding: var(--sl-space-4);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+.sandbox-header {
+  margin-bottom: var(--sl-space-4);
+}
+
+.sandbox-header h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.sandbox-eyebrow {
+  margin: 0 0 var(--sl-space-1);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Пояснение об изоляции песочницы: ответ клиенту не отправляется. */
+.sandbox-isolation {
+  margin: var(--sl-space-2) 0 0;
+  max-width: 70ch;
+  padding: var(--sl-space-3);
+  border-left: 3px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.sandbox-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sl-space-4);
+  align-items: start;
+}
+
+.sandbox-form {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+
+.sandbox-label {
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sandbox-question {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text);
+  font: inherit;
+}
+
+.sandbox-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+}
+
+.sandbox-running {
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
+.sandbox-result {
+  margin-top: var(--sl-space-4);
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.sandbox-result__title {
+  margin: 0 0 var(--sl-space-2);
+  font-size: 16px;
+}
+
+.sandbox-result__subtitle {
+  margin: var(--sl-space-3) 0 var(--sl-space-2);
+  font-size: 14px;
+}
+
+.sandbox-result__answer {
+  margin: 0 0 var(--sl-space-3);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.sandbox-meta,
+.sandbox-source-list,
+.sandbox-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sandbox-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-1) var(--sl-space-3);
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
+.sandbox-source-list {
+  display: grid;
+  gap: var(--sl-space-1);
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
+.sandbox-history {
+  display: grid;
+  gap: var(--sl-space-3);
+}
+
+.sandbox-history__item {
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.sandbox-history__top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sl-space-2);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+}
+
+.sandbox-history__question {
+  margin: var(--sl-space-2) 0 0;
+  font-weight: 700;
+}
+
+.sandbox-history__answer {
+  margin: var(--sl-space-1) 0 var(--sl-space-2);
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.sandbox-history__repeat {
+  margin-top: var(--sl-space-2);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.sandbox-history__repeat:hover {
+  border-color: var(--sl-accent);
+  color: var(--sl-accent);
+}
+
+.sandbox-question:focus-visible,
+.sandbox-actions button:focus-visible,
+.sandbox-history__repeat:focus-visible {
+  outline: 3px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 960px) {
+  .sandbox-layout {
+    grid-template-columns: 1fr;
+  }
+}
