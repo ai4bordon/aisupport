@@ -3,6 +3,7 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { default as pg } from "pg";
+import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
@@ -33,7 +34,18 @@ import { buildSetCookie } from "@/core/session";
 const TEST_CODE = "audit-gate-code-27";
 const TEST_SECRET = "audit-gate-secret-27";
 const TEST_MANAGER_CODE = "audit-gate-manager-27";
-const TENANT_SLUG = "demo-tenant-audit-access-gate";
+
+/**
+ * Слаг арендатора теста.
+ *
+ * Счётчики лимитов живут в базе и общие для всех стендов, поэтому арендатор
+ * у каждого рабочего каталога свой: параллельный прогон в двух worktree
+ * не выжигает квоту друг другу.
+ */
+const TENANT_SLUG = `demo-tenant-audit-access-gate-${createHash("sha256")
+  .update(process.cwd(), "utf8")
+  .digest("hex")
+  .slice(0, 8)}`;
 
 /** База стенда: свои счётчики, чужие тесты не задеваются. */
 const DATABASE_URL =
@@ -55,6 +67,11 @@ const ACCESS_FORM_PATH = resolve(process.cwd(), "src/app/access/access-form.tsx"
 type MiddlewareModule = {
   middleware: (request: NextRequest) => Promise<Response>;
   config: { matcher: string[] };
+  clientIp: (headers: { get(name: string): string | null }) => string;
+  clientBucketKey: (input: {
+    headers: { get(name: string): string | null };
+    cookieHeader: string | null;
+  }) => string;
 };
 
 type AccessFormModule = {
@@ -147,6 +164,48 @@ async function issueAccessCookie(): Promise<string> {
 /** Подписанная cookie диалога: запрос внутри диалога не расходует квоту. */
 function conversationCookie(): string {
   return buildSetCookie("11111111-2222-4333-8444-555555555555").split(";")[0] as string;
+}
+
+/**
+ * Адрес клиента, который вычислит барьер для набора заголовков.
+ *
+ * Правило игры живёт в модуле доступа, а барьер его использует: так его
+ * можно проверить независимо от Next.js.
+ */
+function clientIpFor(headers: Record<string, string>): string {
+  if (!middlewareModule) {
+    throw new Error(
+      `барьер доступа не подключён: ${MIDDLEWARE_PATH} не загрузился (${
+        middlewareLoadError ?? "нет файла"
+      })`,
+    );
+  }
+  return middlewareModule.clientIp({
+    get: (name: string) => headers[name.toLowerCase()] ?? null,
+  });
+}
+
+/**
+ * Ключ счётчика лимита запросов для клиента с указанной cookie.
+ *
+ * Ключ не должен зависеть от заголовка, который подставляет сам клиент:
+ * иначе лимит обходится подменой заголовка.
+ */
+function bucketKeyFor(
+  cookieHeader: string | null,
+  headers: Record<string, string>,
+): string {
+  if (!middlewareModule) {
+    throw new Error(
+      `барьер доступа не подключён: ${MIDDLEWARE_PATH} не загрузился (${
+        middlewareLoadError ?? "нет файла"
+      })`,
+    );
+  }
+  return middlewareModule.clientBucketKey({
+    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+    cookieHeader,
+  });
 }
 
 /**
@@ -515,6 +574,168 @@ describe("A2/A3 — барьер доступа и лимиты стенда п�
         expect(text).not.toContain(TEST_CODE);
         expect(text).not.toContain(TEST_SECRET);
       }
+    });
+  });
+
+  describe("B19 — адрес клиента не подделывается заголовком", () => {
+    it("без ALLOW_PROXY_HEADERS заголовок x-forwarded-for игнорируется", () => {
+      delete process.env.ALLOW_PROXY_HEADERS;
+
+      const first = clientIpFor({ "x-forwarded-for": "203.0.113.5" });
+      const second = clientIpFor({ "x-forwarded-for": "203.0.113.6" });
+
+      // Клиент подставляет заголовок сам: разные значения не должны давать
+      // разные адреса, иначе лимит обходится подменой заголовка.
+      expect(first).toBe(second);
+      expect(first).not.toBe("203.0.113.5");
+      expect(first).not.toBe("203.0.113.6");
+    });
+
+    it("без ALLOW_PROXY_HEADERS разные заголовки не обходят лимит запросов", async () => {
+      delete process.env.ALLOW_PROXY_HEADERS;
+      const cookie = await issueAccessCookie();
+      const dialog = conversationCookie();
+
+      // Десять запросов, одиннадцатый — с другим подделанным заголовком.
+      // Лимит обходиться не должен.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await callMiddleware(
+          nextRequest("/api/chat", {
+            method: "POST",
+            cookie: `${cookie}; ${dialog}`,
+            ip: "203.0.113.5",
+          }),
+        );
+        expect(response.status, `запрос ${attempt + 1}`).toBe(200);
+      }
+
+      const spoofed = await callMiddleware(
+        nextRequest("/api/chat", {
+          method: "POST",
+          cookie: `${cookie}; ${dialog}`,
+          ip: "203.0.113.6",
+        }),
+      );
+
+      expect(spoofed.status).toBe(429);
+    });
+
+    it("без ALLOW_PROXY_HEADERS подмена cookie без кода тоже не обходит лимит", async () => {
+      delete process.env.ALLOW_PROXY_HEADERS;
+      const cookie = await issueAccessCookie();
+      const dialog = conversationCookie();
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await callMiddleware(
+          nextRequest("/api/chat", {
+            method: "POST",
+            cookie: `${cookie}; ${dialog}`,
+            ip: "203.0.113.5",
+          }),
+        );
+        expect(response.status, `запрос ${attempt + 1}`).toBe(200);
+      }
+
+      // Поддельная сессия доступа: ключ счётчика считается по подписи, а
+      // подделать её без кода нельзя.
+      const forged = await callMiddleware(
+        nextRequest("/api/chat", {
+          method: "POST",
+          cookie: `${ACCESS_COOKIE}=forged.session; ${dialog}`,
+          ip: "203.0.113.6",
+        }),
+      );
+
+      expect(forged.status).toBe(401);
+    });
+
+    it("с ALLOW_PROXY_HEADERS=1 заголовок учитывается", () => {
+      process.env.ALLOW_PROXY_HEADERS = "1";
+
+      expect(clientIpFor({ "x-forwarded-for": "203.0.113.5" })).toBe("203.0.113.5");
+      expect(clientIpFor({ "x-forwarded-for": "203.0.113.5" })).not.toBe(
+        clientIpFor({ "x-forwarded-for": "203.0.113.6" }),
+      );
+    });
+
+    it("с ALLOW_PROXY_HEADERS=1 берётся первый адрес цепочки, а не последний", () => {
+      process.env.ALLOW_PROXY_HEADERS = "1";
+
+      // Цепочку дописывают прокси по дороге, поэтому адрес исходного
+      // клиента — первый, а не последний.
+      expect(
+        clientIpFor({ "x-forwarded-for": "203.0.113.5, 198.51.100.7, 10.0.0.1" }),
+      ).toBe("203.0.113.5");
+    });
+
+    it("с ALLOW_PROXY_HEADERS=1 разные адреса дают разные счётчики лимита", async () => {
+      process.env.ALLOW_PROXY_HEADERS = "1";
+      const cookie = await issueAccessCookie();
+      const dialog = conversationCookie();
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const response = await callMiddleware(
+          nextRequest("/api/chat", {
+            method: "POST",
+            cookie: `${cookie}; ${dialog}`,
+            ip: "203.0.113.5",
+          }),
+        );
+        expect(response.status, `запрос ${attempt + 1}`).toBe(200);
+      }
+
+      // Другой клиент за тем же прокси — другой счётчик.
+      const other = await callMiddleware(
+        nextRequest("/api/chat", {
+          method: "POST",
+          cookie: `${cookie}; ${dialog}`,
+          ip: "203.0.113.6",
+        }),
+      );
+      expect(other.status).toBe(200);
+
+      // А тот же клиент сверх лимита — 429.
+      const limited = await callMiddleware(
+        nextRequest("/api/chat", {
+          method: "POST",
+          cookie: `${cookie}; ${dialog}`,
+          ip: "203.0.113.5",
+        }),
+      );
+      expect(limited.status).toBe(429);
+    });
+
+    it("флаги доверия задаёт только явное значение 1", () => {
+      process.env.ALLOW_PROXY_HEADERS = "true";
+      expect(clientIpFor({ "x-forwarded-for": "203.0.113.5" })).toBe(
+        clientIpFor({ "x-forwarded-for": "203.0.113.6" }),
+      );
+
+      process.env.ALLOW_PROXY_HEADERS = "0";
+      expect(clientIpFor({ "x-forwarded-for": "203.0.113.5" })).toBe(
+        clientIpFor({ "x-forwarded-for": "203.0.113.6" }),
+      );
+    });
+
+    it("без прокси ключ счётчика — подписанная сессия, а не заголовок", async () => {
+      delete process.env.ALLOW_PROXY_HEADERS;
+
+      // Ключ не зависит от заголовка: подмена адреса в заголовке не
+      // выдаёт новую квоту.
+      const cookie = await issueAccessCookie();
+      const first = bucketKeyFor(cookie, { "x-forwarded-for": "203.0.113.5" });
+      const second = bucketKeyFor(cookie, { "x-forwarded-for": "203.0.113.6" });
+
+      expect(first).toBe(second);
+      expect(first).not.toContain("203.0.113.5");
+    });
+
+    it("с ALLOW_PROXY_HEADERS=1 ключ счётчика — адрес клиента", () => {
+      process.env.ALLOW_PROXY_HEADERS = "1";
+
+      expect(bucketKeyFor(null, { "x-forwarded-for": "203.0.113.5" })).toContain(
+        "203.0.113.5",
+      );
     });
   });
 

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { clientBucketKey } from "@/modules/access/client-ip";
 import { guardRequest } from "@/modules/access/guard";
 import { readConversationId } from "@/core/session";
 
@@ -46,20 +47,16 @@ export const config = {
 /**
  * Адрес клиента для лимита запросов в минуту.
  *
- * Счётчик ведётся по отпечатку адреса, сам адрес в базе не хранится.
- * За обратным прокси берётся первый адрес из `x-forwarded-for`: список
- * задаёт прокси, доверять всему списку нельзя.
+ * Заголовок `x-forwarded-for` подставляет сам клиент, поэтому доверять ему
+ * всегда нельзя: подмена заголовка обходила бы лимит. Доверие включается
+ * переменной `ALLOW_PROXY_HEADERS=1` — только когда стенд действительно
+ * стоит за обратным прокси.
+ *
+ * Правило живёт в модуле доступа (`src/modules/access/client-ip.ts`):
+ * там же записано, почему без прокси адрес соединения недоступен и все
+ * клиенты делят один счётчик.
  */
-export function clientIp(request: NextRequest): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) {
-      return first;
-    }
-  }
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
+export { clientIp, clientBucketKey } from "@/modules/access/client-ip";
 
 /** Тело ошибки по контракту §2. */
 function errorBody(code: string, message: string, requestId: string): string {
@@ -90,7 +87,10 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   const decision = await guardRequest({
     pathname: request.nextUrl.pathname,
-    ip: clientIp(request),
+    // Ключ лимита запросов: за обратным прокси — адрес клиента, без
+    // прокси — подписанная сессия, потому что заголовок с адресом
+    // подставляет сам клиент.
+    ip: clientBucketKey({ headers: request.headers, cookieHeader }),
     cookieHeader,
     newConversation,
   });

@@ -49,6 +49,14 @@ export type AccessDecision = {
 
 export type AccessRequest = {
   cookieHeader?: string | null;
+  /**
+   * Ключ клиента для лимита запросов в минуту.
+   *
+   * Обычно это адрес клиента. Но адрес из заголовка `x-forwarded-for`
+   * подделать можно, поэтому за обратным прокси его определяет
+   * `clientBucketKey` (`src/modules/access/client-ip.ts`), а без
+   * подтверждённого прокси ключом служит подписанная сессия доступа.
+   */
   ip: string;
 };
 
