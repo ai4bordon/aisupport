@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getPool } from "@/db/pool";
 import { getTenantId } from "@/db/tenant";
-import { runAgent } from "@/core/run";
+import { runAgentInTurn } from "@/core/run-turn";
 import type { NormalizedMessage } from "@/core/run";
 
 /**
@@ -96,7 +96,7 @@ export async function POST(request: Request): Promise<Response> {
     tenantId,
   };
 
-  const outcome = await runAgent(input);
+  const outcome = await runAgentInTurn(input);
 
   return Response.json({
     outcome: outcome.outcome,

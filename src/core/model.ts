@@ -72,6 +72,15 @@ type ClientOptions = {
   /** Пауза перед повтором: по умолчанию 30 с, в тестах — мгновенно. */
   sleep?: (milliseconds: number) => Promise<void>;
   /**
+   * Предел ожидания первого токена одного HTTP-вызова, миллисекунды.
+   *
+   * По умолчанию — 120 с (`FIRST_TOKEN_TIMEOUT_SECONDS`). Предел задаётся
+   * на каждый вызов отдельно: повтор после 429 получает свой полный
+   * предел, а не остаток первого вызова. Значение нужно тестам: без него
+   * проверка тайм-аута ждала бы реальные две минуты.
+   */
+  timeoutMs?: number;
+  /**
    * Идентификатор сессии для заголовка `x-opencode-session`.
    *
    * OpenCode Go требует этот заголовок: без него чат-эндпоинт отвечает
@@ -221,6 +230,7 @@ function parseModelPayload(payload: unknown): ModelResult {
 export function createHttpModelClient(options: ClientOptions): ModelClient {
   const sleep = options.sleep ?? defaultSleep;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? FIRST_TOKEN_TIMEOUT_SECONDS * 1000;
 
   return {
     complete: async (request: ModelRequest): Promise<ModelResult> => {
@@ -228,41 +238,50 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
         throw new ModelUnavailableError("Ключ модели не задан");
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        FIRST_TOKEN_TIMEOUT_SECONDS * 1000,
-      );
-
+      /**
+       * Один HTTP-вызов с собственным пределом ожидания первого токена.
+       *
+       * Контроллер отмены и таймер живут только внутри вызова: предел
+       * относится к каждому отдельному запросу, поэтому повтор после 429
+       * получает свой полный предел, а не остаток первого вызова. Общий
+       * контроллер на весь объект клиента отменял бы повтор уже истёкшим
+       * сигналом.
+       */
       const call = async (): Promise<Response> => {
-        const headers: Record<string, string> = {
-          "content-type": "application/json",
-          authorization: `Bearer ${options.apiKey}`,
-        };
-        // Идентификатор сессии обязателен для Go-эндпоинта чата.
-        const sessionId = request.sessionId ?? options.sessionId;
-        if (sessionId) {
-          headers["x-opencode-session"] = sessionId.startsWith("ses_")
-            ? sessionId
-            : `ses_${sessionId}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const headers: Record<string, string> = {
+            "content-type": "application/json",
+            authorization: `Bearer ${options.apiKey}`,
+          };
+          // Идентификатор сессии обязателен для Go-эндпоинта чата.
+          const sessionId = request.sessionId ?? options.sessionId;
+          if (sessionId) {
+            headers["x-opencode-session"] = sessionId.startsWith("ses_")
+              ? sessionId
+              : `ses_${sessionId}`;
+          }
+          const response = await fetchImpl(`${options.baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model: options.model,
+              messages: request.messages,
+              temperature: request.temperature ?? 0.2,
+              maxTokens: request.maxTokens ?? 1024,
+              // Рассуждение модели выключено: иначе DeepSeek расходует весь
+              // лимит токенов на скрытое рассуждение, `content` остаётся пустым,
+              // а короткий бюджет шага (32 токена на классификацию) исчерпывается
+              // ни на что.
+              reasoning_effort: "none",
+            }),
+            signal: controller.signal,
+          });
+          return response;
+        } finally {
+          clearTimeout(timeout);
         }
-        const response = await fetchImpl(`${options.baseUrl}/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            model: options.model,
-            messages: request.messages,
-            temperature: request.temperature ?? 0.2,
-            max_tokens: request.maxTokens ?? 1024,
-            // Рассуждение модели выключено: иначе DeepSeek расходует весь
-            // лимит токенов на скрытое рассуждение, `content` остаётся пустым,
-            // а короткий бюджет шага (32 токена на классификацию) исчерпывается
-            // ни на что.
-            reasoning_effort: "none",
-          }),
-          signal: controller.signal,
-        });
-        return response;
       };
 
       try {
@@ -290,14 +309,12 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
         if (error instanceof ModelUnavailableError) throw error;
         if (error instanceof Error && error.name === "AbortError") {
           throw new ModelTimeoutError(
-            `Превышен таймаут ожидания первого токена (${FIRST_TOKEN_TIMEOUT_SECONDS} с)`,
+            `Превышен таймаут ожидания первого токена (${timeoutMs >= 1000 ? `${timeoutMs / 1000} с` : `${timeoutMs} мс`})`,
           );
         }
         throw new ModelUnavailableError(
           error instanceof Error ? error.message : "Неизвестная ошибка модели",
         );
-      } finally {
-        clearTimeout(timeout);
       }
     },
   };

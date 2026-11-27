@@ -43,6 +43,7 @@ export type {
   MaxStatus,
   MaxUpdate,
   NormalizedMessage,
+  OutgoingCheckPort,
   RestorePort,
   ShadowQueuePort,
   ShadowQueueRecord,

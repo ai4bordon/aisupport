@@ -7,6 +7,7 @@
  */
 
 import { getPool } from "@/db/pool";
+import { withDialogLock } from "@/core/dialog-lock";
 import type { RequirementSlots } from "@/core/catalog-lookup";
 
 /** Имена слотов — как в таблице `conversation_slots`. */
@@ -67,21 +68,27 @@ export async function loadSlots(
  *
  * Записываются только непустые значения: пустой слот означает, что данные не
  * собраны, и хранить его нечего.
+ *
+ * Запись идёт под блокировкой диалога (`src/core/dialog-lock.ts`): два
+ * параллельных хода одного диалога читают слоты до записи, и без
+ * сериализации второй ход затирал бы первый. Перезапись непустого значения
+ * пустым невозможна: пустые слоты не пишутся вовсе.
  */
 export async function saveSlots(
   conversationId: string,
   slots: RequirementSlots,
 ): Promise<void> {
-  const pool = getPool();
-  for (const name of SLOT_NAMES) {
-    const value = slots[name];
-    if (value === null) continue;
-    await pool.query(
-      `INSERT INTO conversation_slots (conversation_id, slot, value, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (conversation_id, slot)
-       DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [conversationId, name, String(value)],
-    );
-  }
+  await withDialogLock(conversationId, async (client) => {
+    for (const name of SLOT_NAMES) {
+      const value = slots[name];
+      if (value === null) continue;
+      await client.query(
+        `INSERT INTO conversation_slots (conversation_id, slot, value, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (conversation_id, slot)
+         DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [conversationId, name, String(value)],
+      );
+    }
+  });
 }
