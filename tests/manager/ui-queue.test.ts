@@ -310,18 +310,23 @@ describe("состояния раздела очереди", () => {
     mockQueueResponse();
     render(createElement(QueueClient));
     fireEvent.click(await screen.findByRole("button", { name: /Клиент просит подтвердить условия/ }));
+    // «Запомнить ответ» реализован: действие менеджера само является
+    // одобрением, и ответ попадает в базу знаний (R7, ADR-0019).
     for (const name of [
       "Сохранить черновик",
       "Отправить клиенту",
       "Вернуть агенту",
       "Отложить",
       "Написать статью",
-      "Запомнить ответ",
     ]) {
       const button = screen.getByRole("button", { name: new RegExp(name) });
       expect(button).toBeDisabled();
       expect(button).toHaveTextContent("в разработке");
     }
+
+    const remember = screen.getByRole("button", { name: /Запомнить ответ/ });
+    expect(remember).not.toBeDisabled();
+    expect(remember).toHaveTextContent("Запомнить ответ");
   });
 });
 

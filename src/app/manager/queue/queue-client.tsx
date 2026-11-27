@@ -239,6 +239,58 @@ export function QueueClient() {
 
 function QueueDetail({ item }: { item: QueueItem }) {
   const totalCost = item.steps.reduce((sum, step) => sum + Number(step.cost_rub), 0);
+  const [answer, setAnswer] = useState(item.draft ?? item.result ?? "");
+  const [saveState, setSaveState] = useState<
+    | { kind: "idle" }
+    | { kind: "saving" }
+    | { kind: "saved"; title: string }
+    | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+
+  /**
+   * Сохранение ответа менеджера как источника базы знаний.
+   *
+   * Действие само является одобрением: отдельное одобрение старшего и срок
+   * устаревания не требуются (R7, ADR-0019).
+   */
+  async function rememberAnswer(): Promise<void> {
+    const text = answer.trim();
+    if (text.length === 0) {
+      setSaveState({
+        kind: "failed",
+        message: "Ответ пустой — сохранять нечего.",
+      });
+      return;
+    }
+    setSaveState({ kind: "saving" });
+    try {
+      const response = await fetch("/api/manager/queue/remember", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: item.conversation_id,
+          body_md: text,
+        }),
+      });
+      const body = (await response.json()) as {
+        title?: string;
+        error?: { message?: string };
+      };
+      if (!response.ok) {
+        setSaveState({
+          kind: "failed",
+          message: body.error?.message ?? "Не удалось сохранить ответ.",
+        });
+        return;
+      }
+      setSaveState({ kind: "saved", title: body.title ?? text });
+    } catch {
+      setSaveState({
+        kind: "failed",
+        message: "Нет связи с сервером. Попробуйте позже.",
+      });
+    }
+  }
 
   return (
     <article className="queue-detail-card">
@@ -321,13 +373,14 @@ function QueueDetail({ item }: { item: QueueItem }) {
         <textarea
           id="queue-draft"
           className="queue-draft"
-          defaultValue={item.draft ?? item.result ?? ""}
+          value={answer}
+          onChange={(event) => setAnswer(event.target.value)}
           rows={7}
           aria-describedby="queue-draft-help"
         />
         <p id="queue-draft-help" className="queue-hint">
-          Правка остаётся в браузере: серверного маршрута для сохранения черновика пока нет,
-          он подключается командой интеграции.
+          Ответ менеджера сохраняется как источник базы знаний: следующий клиент
+          получит его по тому же вопросу. Отдельное одобрение не требуется.
         </p>
         <div className="queue-actions" aria-label="Действия менеджера">
           <button type="button" disabled title="В разработке">
@@ -345,10 +398,26 @@ function QueueDetail({ item }: { item: QueueItem }) {
           <button type="button" disabled title="В разработке">
             Написать статью <small>в разработке</small>
           </button>
-          <button type="button" disabled title="В разработке">
-            Запомнить ответ <small>в разработке</small>
+          <button
+            type="button"
+            onClick={() => {
+              void rememberAnswer();
+            }}
+            disabled={saveState.kind === "saving"}
+          >
+            {saveState.kind === "saving" ? "Сохраняем…" : "Запомнить ответ"}
           </button>
         </div>
+        {saveState.kind === "saved" ? (
+          <p className="queue-hint" role="status">
+            Ответ сохранён как источник базы знаний: «{saveState.title}».
+          </p>
+        ) : null}
+        {saveState.kind === "failed" ? (
+          <p className="queue-hint" role="alert">
+            {saveState.message}
+          </p>
+        ) : null}
       </section>
     </article>
   );
