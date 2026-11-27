@@ -490,6 +490,8 @@ describe("страница входа менеджера", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/не принят/i);
     expect(alert.textContent).not.toContain("manager-secret-code");
+    // Неверный код не остаётся в поле ввода.
+    expect(screen.queryByDisplayValue("manager-secret-code")).not.toBeInTheDocument();
   });
 
   it("во время проверки кода показывает состояние загрузки", async () => {

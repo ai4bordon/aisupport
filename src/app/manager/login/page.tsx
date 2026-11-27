@@ -49,6 +49,8 @@ export default function ManagerLoginPage() {
       });
 
       if (!response.ok) {
+        // Код не принят — поле очищается, чтобы секрет не оставался в DOM.
+        setCode("");
         setError(await readError(response));
         return;
       }
