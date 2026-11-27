@@ -213,6 +213,62 @@ describe("04 — черновики статей из материалов ди�
     expect(row.rows[0]?.owner).toBe("manager-1");
   });
 
+  it("изоляция источника: чужой диалог и сообщение из другого диалога отклоняются без записи", async () => {
+    const dialog = await seedDialog();
+    const otherDialog = await seedDialog();
+    const before = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM kb_articles WHERE tenant_id = $1",
+      [tenantId],
+    );
+
+    // Сообщение из другого диалога не может войти в провенанс.
+    await expect(
+      createArticleDraft({
+        tenantId,
+        actor: "manager-1",
+        conversationId: dialog.conversationId,
+        sourceMessageIds: [otherDialog.messageIds[0] ?? ""],
+        sourceExcerpt: "Квота обновления лицензии продлевается автоматически",
+        title: "Продление квоты лицензии",
+        bodyMd: ARTICLE_BODY,
+      }),
+    ).rejects.toMatchObject({ code: "validation_error" });
+
+    // Несуществующий диалог — тоже ошибка проверки, а не «создалось что-то».
+    await expect(
+      createArticleDraft({
+        tenantId,
+        actor: "manager-1",
+        conversationId: "11111111-1111-4111-8111-111111111111",
+        sourceMessageIds: dialog.messageIds,
+        sourceExcerpt: "Квота обновления лицензии продлевается автоматически",
+        title: "Продление квоты лицензии",
+        bodyMd: ARTICLE_BODY,
+      }),
+    ).rejects.toMatchObject({ code: "validation_error" });
+
+    // Диалог чужого арендатора не принимается.
+    const otherTenantId = await resetTenant("test-integration-04-foreign");
+    const foreignDialog = await seedDialog(otherTenantId);
+    await expect(
+      createArticleDraft({
+        tenantId,
+        actor: "manager-1",
+        conversationId: foreignDialog.conversationId,
+        sourceMessageIds: foreignDialog.messageIds,
+        sourceExcerpt: "Квота обновления лицензии продлевается автоматически",
+        title: "Продление квоты лицензии",
+        bodyMd: ARTICLE_BODY,
+      }),
+    ).rejects.toMatchObject({ code: "validation_error" });
+
+    const after = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM kb_articles WHERE tenant_id = $1",
+      [tenantId],
+    );
+    expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
+  });
+
   it("AC2: ожидающий и отклонённый черновик не попадают в поиск и в ответ агента", async () => {
     const dialog = await seedDialog();
     const draft = await createArticleDraft({
@@ -247,6 +303,13 @@ describe("04 — черновики статей из материалов ди�
     if (outcome.outcome !== "escalate") return;
     expect(outcome.escalation.reason).toBe("no_confirmed_source");
     expect(outcome.answer).toBeNull();
+    // Черновика нет ни в источниках, ни в трассе: агент о нём не знает.
+    const retrieveStep = outcome.steps.find((step) => step.node === "retrieve");
+    expect(retrieveStep?.sourceIds ?? []).not.toContain(draft.id);
+    expect(retrieveStep?.metadata["matches"] ?? 0).toBe(0);
+    // Эскалация не цитирует материал черновика.
+    expect(outcome.escalation.draft ?? "").not.toContain("квота обновления");
+    expect(outcome.escalation.summary).not.toContain("квота обновления");
 
     // Отклонённый материал остаётся вне выдачи.
     await rejectArticleDraft({
