@@ -2,6 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { Source } from "@/contracts/chat";
 import { getModelClient, ModelTimeoutError, ModelUnavailableError } from "@/core/model";
 import {
+  AGENT_PROFILE,
+  classifierContext,
+  classifierPrompt,
+  normalizeIntent,
+  ROUTE_BY_CLASS,
+  type IntentClass,
+  type IntentRoute,
+} from "@/core/intents";
+import {
   catalogAnswer,
   catalogMatchText,
   catalogSummary,
@@ -12,7 +21,7 @@ import {
   type RequirementSlots,
 } from "@/core/catalog-lookup";
 import { loadSlots, saveSlots } from "@/core/slots";
-import { smallTalkAnswer } from "@/core/small-talk";
+import { stripUrls } from "@/core/no-urls";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
 import { validateAnswer } from "@/core/validate";
 import { currentEmbeddingProvider, search } from "@/modules/knowledge";
@@ -90,6 +99,11 @@ const SYSTEM_PROMPT = [
   "В поле citations помещай дословные фрагменты текста подтверждённых источников,",
   "без ссылок, названий статей и пересказа: только то, что есть в тексте источника.",
   "В поле amounts — только числа, которые дословно встречаются в тексте источников.",
+  // Ссылки в чат не отправляем — ADR-0014 и решение владельца.
+  "Ссылки и URL в текст ответа не вставляй: ссылки на источники и так есть отдельно.",
+  // Формулировка по переданным материалам.
+  "Ты формулируешь текст по переданным чанкам и карточкам позиций.",
+  "Числа, которых нет в переданном материале, не называй.",
   // Формат ответа — ADR-0014.
   "ФОРМАТ ОТВЕТА: не более 120 слов.",
   "Первый абзац — прямой ответ в одном-двух предложениях.",
@@ -222,22 +236,27 @@ function withResolvers<T>(): {
  */
 async function classify(
   input: NormalizedMessage,
-): Promise<{ intent: string; tokensIn: number; tokensOut: number; costRub: number; model: string }> {
+  priorSlots: RequirementSlots | null = null,
+): Promise<{
+  intent: IntentClass;
+  tokensIn: number;
+  tokensOut: number;
+  costRub: number;
+  model: string;
+}> {
   const client = getModelClient();
   const result = await client.complete({
     sessionId: input.conversationId,
     messages: [
-      {
-        role: "system",
-        content:
-          "Определи намерение клиента по базе знаний. Ответь одним словом: код намерения.",
-      },
+      { role: "system", content: classifierPrompt(classifierContext(priorSlots)) },
       { role: "user", content: input.text },
     ],
     maxTokens: 32,
   });
   return {
-    intent: result.text.trim(),
+    // Ответ приводится к коду из закрытого списка: свободный текст не
+    // позволял надёжно выбрать маршрут.
+    intent: normalizeIntent(result.text),
     tokensIn: result.tokensIn,
     tokensOut: result.tokensOut,
     costRub: result.costRub,
@@ -279,41 +298,27 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     }
   };
 
-  // Узел 0: начало диалога. Приветствие и вопрос о возможностях не требуют
-  // подтверждённого источника, поэтому обрабатываются до поиска по БЗ: иначе
-  // они уходили в эскалацию без ответа клиенту.
-  const greeting = smallTalkAnswer(input.text);
-  if (greeting !== null) {
-    await pushStep({
-      node: "greeting",
-      endpoint: null,
-      tokensIn: 0,
-      tokensOut: 0,
-      costRub: 0,
-      latencyMs: 0,
-      metadata: { kind: "small_talk" },
-      sourceIds: [],
-      outcome: "respond",
-      model: null,
-    });
-    return {
-      outcome: "respond",
-      answer: { text: greeting, sources: [] },
-      escalation: null,
-      steps,
-    };
-  }
-
   // Узел 1: классификация.
+  //
+  // Приветствие и вопрос о возможностях больше не обрабатываются отдельной
+  // веткой до классификации: классы `greeting` и `self_info` ведут на
+  // маршрут профиля, и маршрутизация остаётся в одном месте.
+  //
+  // Слоты читаются до классификации: ответ на уточняющий вопрос продолжает
+  // начатый подбор, и без контекста классификатор трактовал его как
+  // `out_of_scope` и уводил запрос в базу знаний вместо каталога.
+  const priorSlots = await loadSlots(input.conversationId);
   const classifyStartedAt = nowMs();
-  let intent = "";
+  let intent: IntentClass = "out_of_scope";
+  let route: IntentRoute = "knowledge";
   try {
     const classification = await withStepTimeout(
       guard.modelBudget(),
-      () => classify(input),
+      () => classify(input, priorSlots),
       "classify",
     );
     intent = classification.intent;
+    route = ROUTE_BY_CLASS[intent];
     await pushStep({
       node: "classify",
       endpoint: "POST /agent/classify",
@@ -321,7 +326,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       tokensOut: classification.tokensOut,
       costRub: classification.costRub,
       latencyMs: elapsedSince(classifyStartedAt),
-      metadata: { intent },
+      // Класс и выбранная дорожка: по трассе видно, куда ушёл запрос и
+      // почему он попал в базу знаний или в каталог.
+      metadata: { intent, route },
       sourceIds: [],
       outcome: null,
       model: classification.model,
@@ -356,10 +363,37 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     );
   }
 
+  // Маршрут профиля: кто я, что умею, чего не делаю. Статический текст без
+  // поиска по базе знаний и без модели для фактов — это сведения о продукте,
+  // а не факты из базы.
+  if (route === "profile") {
+    await pushStep({
+      node: "profile",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: 0,
+      metadata: { intent },
+      sourceIds: [],
+      outcome: "respond",
+      model: null,
+    });
+    return {
+      outcome: "respond",
+      answer: { text: AGENT_PROFILE, sources: [] },
+      escalation: null,
+      steps,
+    };
+  }
+
   // Узел 2: поиск по каталогу продуктов (R1a, R1b).
   //
   // Каталог — снимок фида заказчика. Здесь выясняется, назвал ли клиент
   // продукт, какие данные ещё нужны для подбора и что показать в ответе.
+  //
+  // Каталог вызывается только на своей дорожке: в каталог по «доставке» не
+  // ходим, в статьи по «цене MDaemon» не ходим.
   const catalogStartedAt = nowMs();
   let catalogResult: CatalogLookup | null = null;
   let slots: RequirementSlots = {
@@ -367,7 +401,10 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     termMonths: null,
     deployment: null,
     vendor: null,
+    budget: null,
     productQuery: null,
+    discovery: null,
+    domain: null,
   };
   try {
     slots = await loadSlots(input.conversationId);
@@ -377,29 +414,34 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       termMonths: slots.termMonths ?? fromText.termMonths,
       deployment: slots.deployment ?? fromText.deployment,
       vendor: slots.vendor ?? fromText.vendor,
+      budget: slots.budget ?? fromText.budget,
       productQuery: slots.productQuery ?? fromText.productQuery,
+      discovery: slots.discovery ?? fromText.discovery,
+      domain: slots.domain ?? fromText.domain,
     };
     await saveSlots(input.conversationId, slots);
 
-    // Каталог ищет по 136 тысячам позиций снимка фида: полнотекстовый
-    // запрос занимает больше пяти секунд, поэтому узлу каталога отведён
-    // отдельный предел, а не лимит внутреннего шага.
-    catalogResult = await withStepTimeout(
-      guard.catalogBudget(),
-      () => lookupCatalog(input.text, slots, { tenantId }),
-      "catalog",
-    );
-    // Название продукта сохраняется в диалоге: ответ на уточняющий вопрос
-    // названия не содержит, и без сохранённого названия следующий поиск по
-    // каталогу ничего бы не нашёл. Сохраняется только то, что каталог
-    // действительно нашёл: обычное слово названием продукта быть не может.
-    if (
-      catalogResult.matches.length > 0 &&
-      catalogResult.productQuery !== null &&
-      slots.productQuery === null
-    ) {
-      slots = { ...slots, productQuery: catalogResult.productQuery };
-      await saveSlots(input.conversationId, slots);
+    if (route === "catalog") {
+      // Каталог ищет по 136 тысячам позиций снимка фида: полнотекстовый
+      // запрос занимает больше пяти секунд, поэтому узлу каталога отведён
+      // отдельный предел, а не лимит внутреннего шага.
+      catalogResult = await withStepTimeout(
+        guard.catalogBudget(),
+        () => lookupCatalog(input.text, slots, { tenantId, intent }),
+        "catalog",
+      );
+      // Название продукта сохраняется в диалоге: ответ на уточняющий вопрос
+      // названия не содержит, и без сохранённого названия следующий поиск по
+      // каталогу ничего бы не нашёл. Сохраняется только то, что каталог
+      // действительно нашёл: обычное слово названием продукта быть не может.
+      if (
+        catalogResult.matches.length > 0 &&
+        catalogResult.productQuery !== null &&
+        slots.productQuery === null
+      ) {
+        slots = { ...slots, productQuery: catalogResult.productQuery };
+        await saveSlots(input.conversationId, slots);
+      }
     }
     await pushStep({
       node: "catalog",
@@ -409,9 +451,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       costRub: 0,
       latencyMs: elapsedSince(catalogStartedAt),
       metadata: {
-        productQuery: catalogResult.productQuery,
-        matches: catalogResult.matches.length,
-        missingSlots: catalogResult.missingSlots,
+        productQuery: catalogResult?.productQuery ?? null,
+        matches: catalogResult?.matches.length ?? 0,
+        missingSlots: catalogResult?.missingSlots ?? [],
       },
       sourceIds: [],
       outcome: null,
@@ -789,7 +831,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
 
   return {
     outcome: "respond",
-    answer: { text: generatedText, sources },
+    // Ссылки в текст ответа не попадают: они остаются в `sources`, в трассе
+    // и в кабинете менеджера.
+    answer: { text: stripUrls(generatedText), sources },
     escalation: null,
     steps,
   };

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { detectDomain } from "@/core/catalog-domain";
 import {
   extractProductQuery,
   extractSlots,
@@ -37,6 +38,7 @@ type ProductFixture = {
   quantity: number;
   term: string;
   delivery: string;
+  categoryId: string;
 };
 
 async function seedProducts(): Promise<void> {
@@ -56,6 +58,7 @@ async function seedProducts(): Promise<void> {
       quantity: 50,
       term: "12 мес.",
       delivery: "Серверная",
+      categoryId: "cat-net",
     },
     {
       offerId: "9002",
@@ -65,6 +68,7 @@ async function seedProducts(): Promise<void> {
       quantity: 100,
       term: "12 мес.",
       delivery: "Серверная",
+      categoryId: "cat-net",
     },
     {
       offerId: "9003",
@@ -74,6 +78,7 @@ async function seedProducts(): Promise<void> {
       quantity: 50,
       term: "12 мес.",
       delivery: "Клиентская",
+      categoryId: "cat-av",
     },
     {
       offerId: "9004",
@@ -83,6 +88,17 @@ async function seedProducts(): Promise<void> {
       quantity: 500,
       term: "12 мес.",
       delivery: "Серверная",
+      categoryId: "cat-net",
+    },
+    {
+      offerId: "9005",
+      name: "POS-аксессуар Защитный чехол с ремнем на плечо",
+      vendor: "iDPRT",
+      price: 953,
+      quantity: 1,
+      term: "12 мес.",
+      delivery: "Электронный",
+      categoryId: "cat-gizmo",
     },
   ];
 
@@ -94,10 +110,27 @@ async function seedProducts(): Promise<void> {
   );
   const snapshotId = snapshot.rows[0]?.id ?? "";
 
+  // Категории нужны для отбора по домену: подбор идёт по категориям фида, а
+  // не по словам названия. Форма — как в фиде: категория «Интернет и Сеть»
+  // для почтовой безопасности, «Антивирусы для организаций» для Dr.Web.
+  const categories: Array<{ id: string; path: string }> = [
+    { id: "cat-net", path: "Антивирусы и безопасность / Интернет и Сеть" },
+    { id: "cat-av", path: "Антивирусы и безопасность / Антивирусы для организаций" },
+    { id: "cat-gizmo", path: "Торговое оборудование / POS-аксессуары" },
+  ];
+  for (const category of categories) {
+    await pool.query(
+      `INSERT INTO catalog_categories (tenant_id, category_id, name, path)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tenant_id, category_id) DO UPDATE SET path = EXCLUDED.path`,
+      [tenantId, category.id, category.path.split(" / ").at(-1) ?? category.path, category.path],
+    );
+  }
+
   for (const fixture of fixtures) {
     await pool.query(
-      `INSERT INTO products (tenant_id, offer_id, name, vendor, product_url, price, currency_id, available, delivery, params, snapshot_id, status, published)
-       VALUES ($1, $2, $3, $4, $5, $6, 'RUR', true, true, $7::jsonb, $8, 'approved_by_customer', true)`,
+      `INSERT INTO products (tenant_id, offer_id, name, vendor, product_url, price, currency_id, available, delivery, params, snapshot_id, status, published, category_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'RUR', true, true, $7::jsonb, $8, 'approved_by_customer', true, $9)`,
       [
         tenantId,
         fixture.offerId,
@@ -106,11 +139,13 @@ async function seedProducts(): Promise<void> {
         `https://store.softline.ru/test/${fixture.offerId}/`,
         fixture.price,
         JSON.stringify({
-          "Количество лицензий": String(fixture.quantity),
-          "Срок лицензии": fixture.term,
-          "Тип поставки": fixture.delivery,
+          // Форма фида: количество и срок — диапазоны, а не числа.
+          "К-во пользователей": `от ${fixture.quantity} до ${fixture.quantity}`,
+          "Срок действия": fixture.term,
+          "Способ доставки": fixture.delivery,
         }),
         snapshotId,
+        fixture.categoryId,
       ],
     );
   }
@@ -121,7 +156,10 @@ const NO_SLOTS: RequirementSlots = {
   termMonths: null,
   deployment: null,
   vendor: null,
+  budget: null,
   productQuery: null,
+  discovery: null,
+  domain: null,
 };
 
 describe("подбор по каталогу (R1a/R1b)", () => {
@@ -236,5 +274,47 @@ describe("подбор по каталогу (R1a/R1b)", () => {
 
     expect(result.productQuery).toBe("mdaemon security gateway");
     expect(result.matches.length).toBeGreaterThan(0);
+  });
+
+  it("название продукта не извлекается, когда клиент говорит, что не знает продукт", () => {
+    // Регрессия: «не знаю, что нужно» превращалось в название продукта, и
+    // поиск по словам находил «Защитный чехол с ремнем на плечо».
+    expect(extractProductQuery("Не знаю, что нужно, но хотим защитить почту")).toBeNull();
+    expect(extractProductQuery("Подскажите, что выбрать")).toBeNull();
+    expect(extractProductQuery("Помогите подобрать продукт")).toBeNull();
+  });
+
+  it("определяется предметная область задачи", () => {
+    expect(detectDomain("хотим защитить почту на 50 сотрудников")).toBe("email");
+    expect(detectDomain("нужен антивирус")).toBe("security");
+    expect(detectDomain("привет")).toBeNull();
+  });
+
+  it("«инфраструктура своя» и «бюджета нет» распознаются", () => {
+    // Регрессия: слоты не распознавались, и агент повторял один и тот же
+    // вопрос про срок.
+    const slots = extractSlots("Бюджета нет, инфраструктура своя");
+    expect(slots.budget).toBe("нет");
+    expect(slots.deployment).toBe("сервер");
+    expect(slots.termMonths).toBeNull();
+  });
+
+  it("подбор по задаче не возвращает позиции вне домена", async () => {
+    // Регрессия: на «защитить почту» выдавались «Проектирование дорожных
+    // знаков» и «Защитный чехол с ремнем на плечо» — всё, где встречается
+    // слово «защит».
+    const result = await lookupCatalog(
+      "Не знаю, что нужно, но хотим защитить почту на 50 сотрудников",
+      { ...NO_SLOTS, quantity: 50 },
+      { tenantId, limit: 10 },
+    );
+
+    expect(result.domain).toBe("email");
+    expect(result.matches.length).toBeGreaterThan(0);
+    for (const match of result.matches) {
+      const text = `${match.name} ${JSON.stringify(match.params)}`.toLowerCase();
+      expect(text.includes("чехол"), `«${match.name}» — не почтовая защита`).toBe(false);
+      expect(text.includes("дорожн"), `«${match.name}» — не почтовая защита`).toBe(false);
+    }
   });
 });

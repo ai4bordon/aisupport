@@ -20,6 +20,15 @@ export type CatalogFilters = {
    */
   params?: Record<string, string>;
   /**
+   * Маркеры категорий фида: позиция подходит, если её категория содержит
+   * хотя бы один маркер.
+   *
+   * Нужен для подбора по задаче, а не по названию: на запрос «защитить почту»
+   * поиск по словам названия находил «Защитный чехол с ремнем на плечо» и
+   * «Проектирование дорожных знаков». Категория отсекает такие позиции.
+   */
+  categoryPathMarkers?: string[];
+  /**
    * Арендатор определяется сервером, не приходит из тела запроса клиента.
    * Если не задан, берётся `demo-tenant`.
    */
@@ -155,6 +164,23 @@ function buildFilters(
 
   if (filters.availableOnly === true) {
     clauses.push(`p.available = true`);
+  }
+
+  const markers = filters.categoryPathMarkers ?? [];
+  if (markers.length > 0) {
+    index += 1;
+    // Категория позиции должна содержать хотя бы один маркер домена. Фильтр
+    // по `c.path` покрывает и родительскую категорию: подкатегория наследует
+    // домен родителя.
+    const markerClauses = markers
+      .map((_marker, markerIndex) => {
+        const markerValueIndex = index + markerIndex;
+        return `lower(c.path) LIKE '%' || lower($${markerValueIndex}) || '%'`;
+      })
+      .join(" OR ");
+    clauses.push(`(${markerClauses})`);
+    values.push(...markers);
+    index += markers.length - 1;
   }
 
   for (const [name, value] of Object.entries(filters.params ?? {})) {

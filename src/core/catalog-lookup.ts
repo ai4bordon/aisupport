@@ -20,6 +20,12 @@
 
 import { getPool } from "@/db/pool";
 import { catalog, type CatalogItem } from "@/modules/catalog";
+import {
+  detectDomain,
+  domainCategoryMarkers,
+  type CatalogDomain,
+} from "@/core/catalog-domain";
+import type { IntentClass } from "@/core/intents";
 
 /** Поля, которые клиент указывает для подбора лицензии. */
 export type RequirementSlots = {
@@ -32,6 +38,15 @@ export type RequirementSlots = {
   /** Вендор, если клиент его назвал. */
   vendor: string | null;
   /**
+   * Бюджет клиента: `null` — не выяснен, `"нет"` — не ограничен, иначе сумма
+   * в рублях строкой.
+   *
+   * Строкой, а не числом, потому что состояний три: «бюджет не выяснен»,
+   * «бюджета нет» и «бюджет такой-то». Числом первые два состояния не
+   * различить, и вопрос о бюджете повторялся бы по кругу.
+   */
+  budget: string | null;
+  /**
    * Название продукта, как его понял агент.
    *
    * Хранится в диалоге: ответ клиента на уточняющий вопрос («нужно 10 штук»)
@@ -39,6 +54,22 @@ export type RequirementSlots = {
    * каталогу не нашёл бы позицию.
    */
   productQuery: string | null;
+  /**
+   * Режим подбора: клиент сказал, что не знает нужный продукт.
+   *
+   * В этом режиме подбор идёт по предметной области задачи, а не по словам
+   * запроса: без этого ответ на уточняющий вопрос («бюджета нет, инфраструктура
+   * своя») уводил поиск по слову «инфраструктура» мимо почтовой защиты.
+   */
+  discovery: string | null;
+  /**
+   * Предметная область задачи, определённая по первому сообщению.
+   *
+   * Сохраняется в диалоге: ответ на уточняющий вопрос («бюджета нет,
+   * инфраструктура своя») уже не содержит признаков домена, а подбор должен
+   * остаться в почтовой безопасности.
+   */
+  domain: string | null;
 };
 
 /** Слоты, которые нужно уточнить: порядок соответствует порядку вопросов. */
@@ -48,13 +79,29 @@ export const REQUIRED_SLOTS: Array<keyof RequirementSlots> = [
   "deployment",
 ];
 
+/**
+ * Слоты, которые уточняются, когда продукт не назван.
+ *
+ * Порядок другой: без названия продукта сначала выясняется, что нужно
+ * клиенту, и только потом подбирается вариант.
+ */
+export const DISCOVERY_SLOTS: Array<keyof RequirementSlots> = [
+  "quantity",
+  "budget",
+  "deployment",
+  "termMonths",
+];
+
 /** Вопросы по слотам — задаются по одному. */
 export const SLOT_QUESTIONS: Record<keyof RequirementSlots, string> = {
   quantity: "Сколько лицензий (или пользователей) нужно?",
   termMonths: "На какой срок нужна лицензия — 12 месяцев или больше?",
   deployment: "Как разворачиваем — на сервере заказчика или в облаке?",
   vendor: "Какого вендора рассматриваете?",
+  budget: "Есть ли ограничение по бюджету?",
   productQuery: "Какой продукт вас интересует?",
+  discovery: "Какую задачу решаете?",
+  domain: "В какой области нужна помощь?",
 };
 
 /** Найденная позиция каталога вместе с данными для ответа. */
@@ -89,6 +136,8 @@ export type CatalogLookup = {
   productQuery: string | null;
   /** Незакрытые слоты: их нужно уточнить у клиента. */
   missingSlots: Array<keyof RequirementSlots>;
+  /** Предметная область задачи, определённая по запросу. */
+  domain: CatalogDomain;
 };
 
 /**
@@ -175,13 +224,38 @@ const VENDOR_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Фразы, которыми клиент говорит, что не знает нужный продукт.
+ *
+ * Клиент не называет продукт — он описывает задачу. Такие фразы не должны
+ * превращаться в название продукта: поиск по словам «не знаю но защитить
+ * почту» находил «Защитный чехол с ремнем на плечо».
+ */
+const UNKNOWN_PRODUCT_PATTERNS: RegExp[] = [
+  /не\s+(знаю|понял[аи]?)[,\s]+(что|какой|какая|какие)\s+(нужно|надо|нужен|нужна|выбрать|взять)/iu,
+  /не\s+знаю[,\s]/iu,
+  /что\s+(лучше|посоветуйт[ео]?|выбрать|взять|мне\s+подойд[её]т)/iu,
+  /подскажите[,\s]+что\s+(нужно|взять|выбрать)/iu,
+  /помогите\s+(подобрать|выбрать)/iu,
+  /подобрать\s+(продукт|вариант|решение)/iu,
+];
+
+/**
  * Извлекает название продукта из сообщения.
  *
  * Из текста убираются слова запроса и служебные слова; остаток считается
  * названием продукта. Пустой остаток означает, что клиент назвал продукт
  * неявно («сколько стоит?») — тогда каталог не ищется по имени.
+ *
+ * Фразы «не знаю, что нужно» и «подскажите, что выбрать» означают, что
+ * клиент продукта не назвал: название не извлекается, и подбор идёт по
+ * предметной области задачи.
  */
 export function extractProductQuery(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (UNKNOWN_PRODUCT_PATTERNS.some((pattern) => pattern.test(lower))) {
+    return null;
+  }
+
   const words = text
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -204,7 +278,9 @@ export function extractProductQuery(text: string): string | null {
  * Извлекает вендора из сообщения.
  *
  * Вендор известен по списку вендоров каталога: иначе любое слово с большой
- * буквы считалось бы вендором.
+ * буквы считалось бы вендором. Сравнивается первое значимое слово названия:
+ * в фиде вендор записан как «MDaemon Technologies, Ltd.», а клиент пишет
+ * «MDaemon».
  */
 export function extractVendor(text: string, vendors: readonly string[]): string | null {
   const lower = text.toLowerCase();
@@ -212,6 +288,10 @@ export function extractVendor(text: string, vendors: readonly string[]): string 
     const vendorLower = vendor.toLowerCase();
     if (vendorLower.length < 3) continue;
     if (lower.includes(vendorLower)) {
+      return vendor;
+    }
+    const head = vendorLower.split(/[\s,«»]+/u)[0] ?? vendorLower;
+    if (head.length >= 4 && lower.includes(head)) {
       return vendor;
     }
   }
@@ -238,16 +318,16 @@ export function extractSlots(text: string): RequirementSlots {
   // Количество — только рядом со словом про лицензии или пользователей:
   // «12 месяцев» — это срок, а не количество лицензий.
   const quantityMatch = lower.match(
-    /(\d+)\s*(?:шт|штук|лицензи[йиюей]|польз\w*|работник\w*|сотрудник\w*|мест\w*|устройств\w*|пк)/u,
+    /(\d+)\s*(?:шт|штук|лицензи[йиюей]|польз[\p{L}\p{N}]*|работник[\p{L}\p{N}]*|сотрудник[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|пк)/u,
   );
   if (quantityMatch?.[1]) {
     quantity = Number.parseInt(quantityMatch[1], 10);
   }
   if (quantity === null) {
-    // Голое число берётся, только если в тексте нет срока: иначе «12 месяцев»
-    // превратилось бы в количество 12.
+    // Голое число берётся, только если в тексте нет срока и бюджета: иначе
+    // «12 месяцев» или «50000 рублей» превратились бы в количество.
     const bare = lower.match(/\b(\d{1,5})\b/u);
-    if (bare?.[1] && termMonths === null) {
+    if (bare?.[1] && termMonths === null && !/\s*руб|₽/u.test(lower)) {
       quantity = Number.parseInt(bare[1], 10);
     }
   }
@@ -255,14 +335,56 @@ export function extractSlots(text: string): RequirementSlots {
   let deployment: string | null = null;
   if (/облак|cloud|в облаке/i.test(lower)) {
     deployment = "облако";
-  } else if (/сервер|on-?prem|локальн/i.test(lower)) {
+  } else if (
+    /сервер|on-?prem|локальн|сво[яи]\s+(инфраструктур|сервер|парк)|инфраструктур[\p{L}\p{N}]*\s+(сво[яи]|собственн[\p{L}\p{N}]*|на\s+своем)|собственн[\p{L}\p{N}]*\s+(инфраструктур|сервер)|у\s+себя\s+на\s+сервер/iu.test(
+      lower,
+    )
+  ) {
+    // «Своя инфраструктура», «инфраструктура своя» и «у себя на сервере» —
+    // это развёртывание на сервере заказчика. Без этого слот не
+    // распознавался, и агент повторял один и тот же вопрос.
     deployment = "сервер";
   }
 
-  // Название продукта здесь не вычисляется: оно выводится из текста в
-  // `lookupCatalog` и сохраняется в диалоге только когда каталог действительно
-  // нашёл позицию. Иначе обычное слово («привет») стало бы названием продукта.
-  return { quantity, termMonths, deployment, vendor: null, productQuery: null };
+  // Бюджет: «бюджета нет», «нет бюджета» и «не ограничен» — это ответ, а не
+  // отсутствие ответа. Без различения вопрос о бюджете повторялся бы.
+  let budget: string | null = null;
+  if (
+    /бюджет[\p{L}\p{N}]*\s+(?:нет|не\s+огранич|без\s+огранич)|нет\s+бюджет|без\s+бюджета|бюджета\s+нет|не\s+ограничен|без\s+ограничени/iu.test(
+      lower,
+    )
+  ) {
+    budget = "нет";
+  } else {
+    const budgetMatch = lower.match(
+      /(\d[\d\s ]*)\s*(?:руб|₽|тыс\.?\s*руб|р\.)/u,
+    );
+    if (budgetMatch?.[1]) {
+      const digits = budgetMatch[1].replace(/[^\d]/g, "");
+      if (digits.length > 0) {
+        budget = String(Number.parseInt(digits, 10));
+      }
+    }
+  }
+
+  return {
+    quantity,
+    termMonths,
+    deployment,
+    vendor: null,
+    budget,
+    productQuery: null,
+    // Режим подбора: клиент сказал, что не знает нужный продукт. Дальше
+    // подбор идёт по предметной области задачи, даже когда ответ на
+    // уточняющий вопрос содержит слова, похожие на название продукта.
+    discovery: UNKNOWN_PRODUCT_PATTERNS.some((pattern) => pattern.test(lower))
+      ? "подбор"
+      : null,
+    // Домен определяется по первому сообщению и сохраняется: ответ на
+    // уточняющий вопрос уже не содержит признаков («бюджета нет,
+    // инфраструктура своя»).
+    domain: detectDomain(text),
+  };
 }
 
 /** Параметр позиции каталога, приведённый к строке. */
@@ -383,15 +505,53 @@ function slotSatisfied(
 export async function lookupCatalog(
   text: string,
   slots: RequirementSlots,
-  options: { tenantId: string; limit?: number } ,
+  options: { tenantId: string; limit?: number; intent?: IntentClass },
 ): Promise<CatalogLookup> {
-  const productQuery = slots.productQuery ?? extractProductQuery(text);
+  // В режиме подбора продукт не назван: подбор идёт по предметной области
+  // задачи, даже если ответ на уточняющий вопрос содержит слова, похожие на
+  // название продукта («бюджета нет, инфраструктура своя»).
+  const inDiscovery =
+    options.intent === "product_unknown" ||
+    slots.discovery !== null ||
+    extractProductQuery(text) === null;
+  const productQuery = inDiscovery
+    ? slots.productQuery
+    : slots.productQuery ?? extractProductQuery(text);
   const vendors = await listVendors(options.tenantId);
   const vendor = extractVendor(text, vendors);
   const mergedSlots: RequirementSlots = { ...slots, vendor, productQuery };
+  // Домен берётся из сохранённого слота: ответ на уточняющий вопрос уже не
+  // содержит признаков домена.
+  const domain = (slots.domain ?? detectDomain(text)) as CatalogDomain;
 
+  // Клиент не назвал продукт: подбираем по предметной области задачи, а не
+  // по словам запроса. Поиск по словам давал мусор — на «защитить почту»
+  // находились «Защитный чехол с ремнем на плечо» и «Проектирование дорожных
+  // знаков».
   if (productQuery === null) {
-    return { matches: [], productQuery: null, missingSlots: missingSlots(mergedSlots) };
+    const byDomain = await searchByDomain(domain, {
+      tenantId: options.tenantId,
+      vendor,
+      limit: options.limit ?? 10,
+      slots: mergedSlots,
+    });
+    // Варианты — по одному от каждого вендора: клиенту нужен выбор между
+    // продуктами разных производителей, а не список номеров лицензий одного.
+    const variants = distinctByVendor(byDomain);
+    // В режиме подбора порядок вопросов другой: бюджет и инфраструктура
+    // выясняются до подбора варианта.
+    const filtered =
+      variants.length > 0
+        ? variants.filter(
+            (match) => scoreBySlots(match, mergedSlots) === countFilledSlots(mergedSlots),
+          )
+        : variants;
+    return {
+      matches: filtered.length > 0 ? filtered : variants,
+      productQuery: null,
+      missingSlots: missingSlots(mergedSlots, "discovery"),
+      domain,
+    };
   }
 
   // Выборка шире итоговой: позиции, закрывающие собранные слоты, должны
@@ -409,6 +569,37 @@ export async function lookupCatalog(
     const item = await catalog.getByOfferId(hit.offerId, { tenantId: options.tenantId });
     if (item === null) continue;
     matches.push(toMatch(item));
+  }
+
+  // Если клиент назвал вендор, показываются только его позиции: «нужен
+  // MDaemon Security Gateway» — это про MDaemon, а «Security Gateway» в
+  // названии встречается и у Dr.Web, и у Zoho.
+  if (vendor !== null) {
+    const ofVendor = matches.filter((match) => match.vendor === vendor);
+    if (ofVendor.length > 0) {
+      matches.length = 0;
+      matches.push(...ofVendor);
+    }
+  }
+
+  // Название найдено, но клиент описал задачу («защита почты»), а не назвал
+  // продукт. Тогда поиск по словам даёт одну линейку вендора, а клиенту нужен
+  // выбор: доменный отбор добавляет варианты других вендоров.
+  //
+  // Если клиент назвал вендора («нужен Dr.Web»), доменный отбор не
+  // применяется: он подмешал бы другие вендоры к названному.
+  if (domain !== null && matches.length > 0 && !namesVendor(text, matches)) {
+    const byDomain = await searchByDomain(domain, {
+      tenantId: options.tenantId,
+      vendor: null,
+      limit: FETCH_LIMIT,
+      slots: mergedSlots,
+    });
+    for (const match of byDomain) {
+      if (!matches.some((existing) => existing.offerId === match.offerId)) {
+        matches.push(match);
+      }
+    }
   }
 
   // Если по запросу ничего не нашлось, ищем шире — без вендора.
@@ -454,16 +645,164 @@ export async function lookupCatalog(
       (match) => scoreBySlots(match, mergedSlots) === REQUIRED_SLOTS.length ||
         scoreBySlots(match, mergedSlots) === countFilledSlots(mergedSlots),
     );
+    const chosen = fitting.length > 0 ? fitting : ordered;
+    // Варианты — по одному от каждого вендора: клиенту нужен выбор между
+    // продуктами разных производителей, а не список номеров лицензий одного.
     return {
-      matches: fitting.length > 0 ? fitting : ordered,
+      matches: distinctByVendor(chosen),
       productQuery,
       missingSlots: filtered,
+      domain,
     };
   }
 
-  return { matches, productQuery, missingSlots: missing };
+  return { matches, productQuery, missingSlots: missing, domain };
 }
 
+/**
+ * Назван ли вендор в тексте запроса.
+ *
+ * Проверяется по вендорам найденных позиций: если клиент написал «нужен
+ * Dr.Web», доменный отбор не применяется, иначе к названному вендору
+ * подмешались бы другие.
+ */
+function namesVendor(text: string, matches: CatalogMatch[]): boolean {
+  const lower = text.toLowerCase();
+  return matches.some((match) => {
+    if (match.vendor === null) return false;
+    const vendor = match.vendor.toLowerCase();
+    // Вендор в фиде длинный («MDaemon Technologies, Ltd.»), а клиент пишет
+    // «MDaemon»: сравнивается первое значимое слово.
+    const head = vendor.split(/[\s,«»]+/u)[0] ?? vendor;
+    return head.length >= 3 && lower.includes(head);
+  });
+}
+
+/**
+ * Подбор позиций по предметной области задачи.
+ *
+ * Клиент не назвал продукт, поэтому искать по словам нечего: поиск по словам
+ * находил всё, где встречается «защит». Вместо этого берутся категории фида
+ * домена (для почты — «Интернет и Сеть», «Почтовые утилиты», «Почтовые
+ * клиенты»), а внутри них — позиции с подтверждённой ценой и подходящим
+ * количеством.
+ *
+ * Вендоры различаются: клиент спросил про защиту почты, а не про безопасность
+ * вообще, поэтому вендоры вроде «Доктор Веб» (антивирусы) в почтовую
+ * безопасность не попадают.
+ */
+async function searchByDomain(
+  domain: CatalogDomain,
+  options: {
+    tenantId: string;
+    vendor: string | null;
+    limit: number;
+    slots: RequirementSlots;
+  },
+): Promise<CatalogMatch[]> {
+  const markers = domainCategoryMarkers(domain);
+  if (markers === null) {
+    return [];
+  }
+
+  // Бюджет ограничивает цену позиции: клиент назвал сумму, значит позиции
+  // дороже не подходят. «Бюджета нет» ограничения не задаёт.
+  const budgetLimit =
+    options.slots.budget !== null && options.slots.budget !== "нет"
+      ? Number.parseInt(options.slots.budget, 10)
+      : null;
+  const budgetIsNumber = budgetLimit !== null && Number.isFinite(budgetLimit);
+
+  // Позиции домена берутся напрямую из категорий: полнотекстовый поиск по
+  // названию здесь неприменим, названия вендоров не содержат слов запроса.
+  //
+  // Порядок параметров: $1 — арендатор, $2 — вендор, далее маркеры
+  // категорий, последним — бюджет. Маркеры и бюджет не должны делить индекс:
+  // при пересечении фильтр по категории не применялся, и в выдачу попадали
+  // «Защитный чехол с ремнем на плечо» и «Проектирование дорожных знаков».
+  const budgetIndex = markers.length + 3;
+  const limitIndex = budgetIndex + 1;
+  // Для домена почты одной категории мало: «Почтовые клиенты» и «Почтовые
+  // утилиты» — это почта, а не почтовая защита. Поэтому домен почты ищется по
+  // категории безопасности И признаку почты в самой позиции.
+  const emailTermClause =
+    domain === "email"
+      ? `AND (lower(p.name) LIKE '%email%' OR lower(p.name) LIKE '%mail%'
+             OR lower(p.name) LIKE '%antispam%' OR lower(p.name) LIKE '%антиспам%'
+             OR lower(p.name) LIKE '%почт%' OR lower(p.name) LIKE '%шлюз%'
+             OR lower(p.name) LIKE '%gateway%'
+             OR lower(p.params::text) LIKE '%email%'
+             OR lower(p.params::text) LIKE '%mail%'
+             OR lower(p.params::text) LIKE '%почт%')`
+      : "";
+  // Количество фильтруется в самом запросе: «1 пользователь» не подходит
+  // клиенту, которому нужны 50, а после выборки этот лицензионный вариант
+  // оказывался первым.
+  const quantityIndex = limitIndex + 1;
+  const result = await getPool().query<{
+    offer_id: string;
+    name: string;
+    vendor: string | null;
+    price: string;
+    category_path: string | null;
+  }>(
+    `SELECT p.offer_id, p.name, p.vendor, p.price, c.path AS category_path
+       FROM products p
+       JOIN catalog_snapshots s ON s.id = p.snapshot_id
+       LEFT JOIN catalog_categories c
+         ON c.tenant_id = p.tenant_id AND c.category_id = p.category_id
+      WHERE p.tenant_id = $1
+        AND p.price > 0
+        AND ($2::text IS NULL OR p.vendor = $2)
+        AND (${markers
+          .map((_marker, index) => `lower(c.path) LIKE '%' || lower($${index + 3}) || '%'`)
+          .join(" OR ")})
+        ${emailTermClause}
+        AND ($${budgetIndex}::numeric IS NULL OR p.price <= $${budgetIndex})
+        AND ($${quantityIndex}::integer IS NULL
+             OR COALESCE((regexp_match(p.params->>'К-во пользователей', '[0-9]+'))[1]::integer, 0) >= $${quantityIndex})
+      ORDER BY
+        (CASE WHEN p.params->>'К-во пользователей' IS NULL THEN 0 ELSE 1 END) DESC,
+        p.price
+      LIMIT $${limitIndex}`,
+    [
+      options.tenantId,
+      options.vendor,
+      ...markers,
+      budgetIsNumber ? budgetLimit : null,
+      options.limit,
+      options.slots.quantity,
+    ],
+  );
+  const matches: CatalogMatch[] = [];
+  for (const row of result.rows) {
+    const item = await catalog.getByOfferId(row.offer_id, {
+      tenantId: options.tenantId,
+    });
+    if (item === null) continue;
+    matches.push(toMatch(item));
+  }
+  return matches;
+}
+
+/**
+ * Варианты для ответа: не более одной позиции от каждого вендора.
+ *
+ * Без этого в выдаче оказывались десять позиций одного вендора — клиенту
+ * показывался не выбор, а список номеров лицензий одного продукта. Вендоры
+ * здесь и есть варианты: Dr.Web, Kaspersky, MDaemon.
+ */
+function distinctByVendor(matches: CatalogMatch[]): CatalogMatch[] {
+  const seenVendors: Record<string, boolean> = {};
+  const result: CatalogMatch[] = [];
+  for (const match of matches) {
+    const vendor = match.vendor ?? match.offerId;
+    if (seenVendors[vendor] === true) continue;
+    seenVendors[vendor] = true;
+    result.push(match);
+  }
+  return result;
+}
 /** Число слотов, по которым собраны данные. */
 function countFilledSlots(slots: RequirementSlots): number {
   return REQUIRED_SLOTS.filter((slot) => slots[slot] !== null).length;
@@ -474,7 +813,7 @@ function countFilledSlots(slots: RequirementSlots): number {
  *
  * Позиция, у которой параметр совпадает с собранным слотом, релевантнее:
  * клиент спросил про 50 лицензий, и позиция на 50 подходит, а позиция на 18 —
- * нет.
+ * нет. Бюджет в счёт не входит: он ограничивает цену, а не свойство позиции.
  */
 function scoreBySlots(match: CatalogMatch, slots: RequirementSlots): number {
   let score = 0;
@@ -485,9 +824,20 @@ function scoreBySlots(match: CatalogMatch, slots: RequirementSlots): number {
   return score;
 }
 
-/** Слоты, которые ещё не закрыты. */
-export function missingSlots(slots: RequirementSlots): Array<keyof RequirementSlots> {
-  return REQUIRED_SLOTS.filter((slot) => slots[slot] === null);
+/**
+ * Слоты, которые ещё не закрыты.
+ *
+ * Порядок вопросов зависит от режима: для известного продукта уточняются
+ * параметры лицензии (количество, срок, развёртывание), для подбора по
+ * задаче — сначала бюджет и инфраструктура. Порядок разный, потому что в
+ * первом случае продукт уже известен, а во втором — ещё нет.
+ */
+export function missingSlots(
+  slots: RequirementSlots,
+  mode: "known" | "discovery" = "known",
+): Array<keyof RequirementSlots> {
+  const order = mode === "known" ? REQUIRED_SLOTS : DISCOVERY_SLOTS;
+  return order.filter((slot) => slots[slot] === null);
 }
 
 /** Позиция каталога в виде, пригодном для ответа. */
@@ -508,13 +858,18 @@ function toMatch(item: CatalogItem): CatalogMatch {
   };
 }
 
-/** Вендоры каталога — по ним узнаётся вендор в сообщении клиента. */
+/**
+ * Вендоры каталога — по ним узнаётся вендор в сообщении клиента.
+ *
+ * Список не ограничен: в фиде 1237 вендоров, и ограничение в 200 отсекало
+ * MDaemon, из-за чего клиентский запрос «нужен MDaemon» не распознавался как
+ * запрос конкретного вендора и в ответ попадали позиции других производителей.
+ */
 async function listVendors(tenantId: string): Promise<string[]> {
   const result = await getPool().query<{ vendor: string }>(
     `SELECT DISTINCT vendor FROM products
       WHERE tenant_id = $1 AND vendor IS NOT NULL AND vendor <> ''
-      ORDER BY vendor
-      LIMIT 200`,
+      ORDER BY vendor`,
     [tenantId],
   );
   return result.rows.map((row) => row.vendor);
@@ -550,15 +905,56 @@ export function formatPrice(price: number, currency: string): string {
 }
 
 /**
+ * Название позиции без вклеенного количества и без вендора в начале.
+ *
+ * В фиде количество лицензий входит в наименование («… Security Gateway …, 50
+ * пользователей»), а вендор стоит первым словом («Доктор Веб Dr.Web …»).
+ * Количество показывается отдельным полем, вендор — тоже, поэтому из
+ * названия убираются оба: иначе «Доктор Веб Dr.Web … — Доктор Веб»
+ * читается как сбой.
+ */
+export function cleanProductName(name: string, vendor: string | null = null): string {
+  let cleaned = name.replace(
+    /,\s*\d+\s*(?:пользовател[\p{L}\p{N}]*|пк|шт[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|лицензи[\p{L}\p{N}]*)?\s*$/iu,
+    "",
+  );
+  if (vendor !== null) {
+    // Убирается только полное название вендора в начале: у MDaemon это
+    // «MDaemon Technologies, Ltd.», а у Dr.Web — «Доктор Веб». Первое слово
+    // не трогается: у MDaemon оно часть названия продукта.
+    const escaped = vendor.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    cleaned = cleaned.replace(new RegExp(`^${escaped}\\s+`, "iu"), "");
+  }
+  return cleaned.trim();
+}
+
+/**
+ * Количество лицензий позиции — для показа отдельным полем.
+ *
+ * В названии фида количество вклеено в наименование («…, 50»), и в ответе
+ * это читалось как часть названия. Количество показывается отдельной строкой.
+ */
+export function licensedCountText(match: CatalogMatch): string | null {
+  const count = licensedCount(match.item);
+  return count === null ? null : `${count} польз.`;
+}
+
+/**
  * Краткий перечень позиций — для сопровождения уточняющего вопроса.
  *
  * Показываются только те позиции, по которым клиент уже может сориентироваться:
  * название и цена из снимка фида.
  */
 export function catalogSummary(matches: CatalogMatch[]): string {
-  const lines = matches.slice(0, 3).map(
-    (match) => `— ${match.name}: ${formatPrice(match.price, match.currency)}`,
-  );
+  const lines = matches.slice(0, 3).map((match) => {
+    const count = licensedCountText(match);
+    // Вендор в перечне нужен: в названии он убран, а иначе клиент не видит,
+    // кто производитель. Позиции разных вендоров иначе неразличимы.
+    const vendor = match.vendor === null ? "" : `${match.vendor}, `;
+    return `— ${vendor}${cleanProductName(match.name, match.vendor)}: ${formatPrice(match.price, match.currency)}${
+      count === null ? "" : ` (${count})`
+    }`;
+  });
   if (lines.length === 0) return "";
   return `Похожие позиции в фиде:\n${lines.join("\n")}`;
 }
@@ -569,31 +965,42 @@ export function catalogSummary(matches: CatalogMatch[]): string {
  * Формат по ADR-0014: сначала прямой ответ, затем позиции с ценой из снимка
  * фида, в конце ссылка на карточку. Суммы берутся из карточки каталога, а не
  * из ответа модели, поэтому модель не может назвать другую цену.
+ *
+ * Название позиции очищается от вклеенного количества, вендор и количество
+ * показываются отдельными полями: в названии фида они дублируются, а в ответе
+ * это выглядело как «…, 6: 18 516 ₽» без разделителя.
  */
 export function catalogAnswer(
   matches: CatalogMatch[],
   productQuery: string | null,
 ): string {
   const chosen = matches.slice(0, 3);
-  const subject = productQuery === null ? "подходящие позиции" : `«${productQuery}»`;
+  const subject =
+    productQuery === null
+      ? "по вашей задаче"
+      : `по запросу «${productQuery}»`;
 
   const lines: string[] = [];
   lines.push(
-    `По фиду нашёл ${chosen.length} ${chosen.length === 1 ? "позицию" : "позиции"} по запросу ${subject}.`,
+    `По фиду нашёл ${chosen.length} ${chosen.length === 1 ? "позицию" : "позиции"} ${subject}.`,
   );
   lines.push("");
   chosen.forEach((match, index) => {
+    const count = licensedCountText(match);
+    const details: string[] = [];
+    if (match.vendor !== null) details.push(match.vendor);
+    if (count !== null) details.push(count);
+    details.push(formatPrice(match.price, match.currency));
+    // Вендор в начале названия фида дублируется отдельным полем, поэтому из
+    // названия он убирается: «Доктор Веб Dr.Web … — Доктор Веб» читается
+    // как сбой.
     lines.push(
-      `${index + 1}. ${match.name} — ${formatPrice(match.price, match.currency)}${
-        match.vendor === null ? "" : `, ${match.vendor}`
-      }`,
+      `${index + 1}. ${cleanProductName(match.name, match.vendor)} — ${details.join(", ")}`,
     );
   });
   lines.push("");
   lines.push("Цены и наличие взяты из снимка фида, а не подтверждены в реальном времени.");
-  const url = chosen.find((match) => match.url !== null)?.url;
-  if (url !== undefined && url !== null) {
-    lines.push(`Карточка: ${url}`);
-  }
+  // Ссылка на карточку в текст ответа не попадает: она остаётся в
+  // источниках ответа, в трассе и в кабинете менеджера.
   return lines.join("\n");
 }

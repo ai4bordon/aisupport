@@ -333,16 +333,10 @@ describe("ядро агента", () => {
     expect(steps.rows.map((row) => row.node)).toContain("retrieve");
   });
 
-  it("приветствие даёт respond без источников и без вызова модели", async () => {
-    // Регрессия: «Привет» уходило в поиск по БЗ, не находило совпадений и
-    // превращалось в эскалацию — клиент в MAX получал тишину.
-    let modelCalled = false;
-    setModelClient({
-      complete: async (): Promise<ModelResult> => {
-        modelCalled = true;
-        return { text: "", amounts: [], citations: [], tokensIn: 0, tokensOut: 0, costRub: 0, model: "stub" };
-      },
-    });
+  it("приветствие даёт профиль агента без источников", async () => {
+    // Маршрут профиля: класс `greeting` ведёт к статическому описанию
+    // агента, без поиска по базе знаний и без модели для фактов.
+    setModelClient(okModel("greeting"));
 
     const outcome = await runAgent({
       conversationId,
@@ -357,12 +351,12 @@ describe("ядро агента", () => {
     expect(outcome.outcome).toBe("respond");
     if (outcome.outcome !== "respond") return;
     expect(outcome.answer.sources).toHaveLength(0);
-    expect(outcome.answer.text).toContain("Здравствуйте");
-    expect(modelCalled).toBe(false);
+    expect(outcome.answer.text).toContain("Софтлайн");
+    expect(outcome.steps.some((step) => step.node === "profile")).toBe(true);
   });
 
-  it("вопрос о возможностях даёт respond без источников", async () => {
-    setModelClient(okModel(ARTICLE_TEXT));
+  it("вопрос о возможностях даёт профиль агента", async () => {
+    setModelClient(okModel("self_info"));
 
     const outcome = await runAgent({
       conversationId,
@@ -378,6 +372,26 @@ describe("ядро агента", () => {
     if (outcome.outcome !== "respond") return;
     expect(outcome.answer.sources).toHaveLength(0);
     expect(outcome.answer.text.length).toBeGreaterThan(20);
+  });
+
+  it("класс намерения и маршрут пишутся в трассу", async () => {
+    setModelClient(okModel("product_known"));
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      channel: "max",
+      externalChatId: "4242",
+      text: "Нужен MDaemon Standard",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    const classifyStep = outcome.steps.find((step) => step.node === "classify");
+    expect(classifyStep?.metadata).toMatchObject({
+      intent: "product_known",
+      route: "catalog",
+    });
   });
 
   it("вопрос о продукте без источника даёт escalate", async () => {

@@ -30,19 +30,47 @@ function chatRequest(
   });
 }
 
-function okModel(text: string, citations: string[] = []): {
+/**
+ * Заглушка модели: отвечает кодом класса на запрос классификации и текстом
+ * ответа на генерацию.
+ *
+ * Классификатор и генератор различаются по системному промпту, поэтому одна
+ * заглушка обслуживает обе фазы: иначе классификатор получал бы текст ответа
+ * и маршрут определялся бы неверно.
+ */
+function okModel(
+  text: string,
+  citations: string[] = [],
+  intent = "howto",
+): {
   complete: (request: ModelRequest) => Promise<ModelResult>;
 } {
   return {
-    complete: async (): Promise<ModelResult> => ({
-      text,
-      amounts: [],
-      citations,
-      tokensIn: 10,
-      tokensOut: 20,
-      costRub: 0.1,
-      model: "stub-model",
-    }),
+    complete: async (request: ModelRequest): Promise<ModelResult> => {
+      const isClassification = request.messages.some((message) =>
+        message.content.includes("класс обращения"),
+      );
+      if (isClassification) {
+        return {
+          text: intent,
+          amounts: [],
+          citations: [],
+          tokensIn: 10,
+          tokensOut: 2,
+          costRub: 0.1,
+          model: "stub-model",
+        };
+      }
+      return {
+        text,
+        amounts: [],
+        citations,
+        tokensIn: 10,
+        tokensOut: 20,
+        costRub: 0.1,
+        model: "stub-model",
+      };
+    },
   };
 }
 
@@ -286,6 +314,9 @@ describe("POST /v1/chat", () => {
     // диалоге. Первый ответ задаёт вопрос о количестве, второй запрос с
     // ответом на вопрос закрывает слот и даёт карточку с ценой.
     const conversationId = "1a2b3c4d-2222-4222-8222-222222222222";
+    // Класс `product_known` ведёт на маршрут каталога: подбор по названию
+    // с уточняющими вопросами по слотам.
+    setModelClient(okModel(ARTICLE_TEXT, [ARTICLE_TEXT], "product_known"));
 
     const first = await POST(
       chatRequest({
