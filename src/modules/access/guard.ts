@@ -42,7 +42,13 @@ const MESSAGES: Record<AccessDecision["reason"], string> = {
 export type GuardRequest = {
   /** Путь запроса без строки запроса. */
   pathname: string;
-  /** Адрес клиента: по нему считается лимит запросов в минуту. */
+  /**
+   * Ключ клиента для лимита запросов в минуту.
+   *
+   * Обычно это адрес клиента, но адрес из заголовка подделать можно, поэтому
+   * ключ определяет `clientBucketKey` (`src/modules/access/client-ip.ts`):
+   * за обратным прокси — адрес, без прокси — подписанная сессия доступа.
+   */
   ip: string;
   /** Заголовок `Cookie` целиком: в нём и код доступа, и cookie диалога. */
   cookieHeader: string | null;
