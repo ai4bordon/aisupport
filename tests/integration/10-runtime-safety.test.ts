@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closePool } from "@/db/pool";
 import { POST } from "@/app/api/chat/route";
+import { createHash } from "node:crypto";
+import { buildCookieValue } from "@/core/session";
 import {
   createHttpModelClient,
   setModelClient,
@@ -98,10 +100,21 @@ async function seedKnowledge(): Promise<void> {
   );
 }
 
-function chatRequest(body: unknown): Request {
+function turnKeyForTest(tenantId: string, conversationId: string, clientMessageId: string): string {
+  const digest = createHash("sha256").update(`turn:${tenantId}:${conversationId}:${clientMessageId}`).digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
+}
+
+function chatRequest(body: unknown, cookie?: string): Request {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (cookie) headers["cookie"] = cookie;
   return new Request("http://localhost/api/chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -336,7 +349,15 @@ describe("интеграционная проверка среза 10", () => {
     const first = "5a1b2c3d-8888-4888-8888-888888888888";
     const second = "5a1b2c3d-9999-4999-8999-999999999999";
 
-    await Promise.all([
+    // Оба хода идут от одного браузера: подписанная cookie и есть привязка
+    // к диалогу. Без неё второй параллельный ход без cookie получает новый
+    // диалог, и проверка не находит оба сообщения в одном. Cookie строится
+    // тем же секретом, что и в приложении (`buildCookieValue`).
+    const cookie = `support_conversation=${encodeURIComponent(
+      buildCookieValue(conversationId),
+    )}`;
+
+    const responses = await Promise.all([
       POST(
         chatRequest({
           conversation_id: conversationId,
@@ -344,7 +365,7 @@ describe("интеграционная проверка среза 10", () => {
             client_message_id: first,
             text: "Как получить электронную лицензию?",
           },
-        }),
+        }, cookie),
       ),
       POST(
         chatRequest({
@@ -353,17 +374,23 @@ describe("интеграционная проверка среза 10", () => {
             client_message_id: second,
             text: "Сколько стоит лицензия?",
           },
-        }),
+        }, cookie),
       ),
     ]);
+    for (const response of responses) {
+      expect(response.status).toBe(200);
+    }
 
     // Оба клиентских сообщения записаны.
     const clientMessages = await testPool().query<{ client_message_id: string }>(
       "SELECT client_message_id FROM messages WHERE conversation_id = $1 AND role = 'client'",
       [conversationId],
     );
+    // Ключ хода — детерминированный UUID по (арендатор, диалог, сообщение):
+    // он одинаков при каждом прогоне, поэтому сравнивается вычисленное
+    // значение, а не исходные `client_message_id`.
     expect(clientMessages.rows.map((row) => row.client_message_id).sort()).toEqual(
-      [first, second].sort(),
+      [turnKeyForTest(tenantId, conversationId, first), turnKeyForTest(tenantId, conversationId, second)].sort(),
     );
 
     // Трасса не потеряна: шаги обоих ходов на месте, ключи разные.
