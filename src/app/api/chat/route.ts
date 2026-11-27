@@ -7,6 +7,12 @@ import { maskPersonalData, restoreMaskedData } from "@/core/mask";
 import { createsManagerQueue } from "@/core/escalation-mode";
 import { runAgent } from "@/core/run";
 import { buildSetCookie, readConversationId } from "@/core/session";
+import {
+  isShadowMode,
+  recordManagerQueue,
+  recordShadowDraft,
+  SHADOW_REASON,
+} from "@/core/shadow-mode";
 import { validateOutgoingText } from "@/core/validate";
 
 /**
@@ -85,6 +91,11 @@ export async function POST(request: Request): Promise<Response> {
 
   const pool = getPool();
 
+  // Режим тени снимается один раз в начале обработки и действует на неё
+  // целиком: переключение настройки посередине обработки не должно менять
+  // её исход (docs/plans/06-shadow-mode.md, шаг 4).
+  const shadowMode = await isShadowMode(pool, tenantId);
+
   // Идемпотентность: повтор client_message_id не создаёт второе обращение.
   const existing = await pool.query<{ id: string }>(
     "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2 AND role = 'client'",
@@ -131,6 +142,41 @@ export async function POST(request: Request): Promise<Response> {
         {
           conversation_id: conversationId,
           message_id: previousRow?.id ?? existingMessage.id,
+          outcome: "escalate",
+          answer: null,
+          escalation: row
+            ? {
+                id: row.id,
+                reason: row.reason,
+                summary: row.summary,
+                draft: row.draft,
+              }
+            : null,
+          trace: { steps: 0, tokens: 0, cost_rub: 0 },
+        },
+        { headers },
+      );
+    }
+
+    if (shadowMode) {
+      // В режиме тени ответ агента не отправлялся и в переписку не попал:
+      // повторный запрос того же `client_message_id` возвращает тот же
+      // технический результат — эскалацию с черновиком из очереди.
+      const escalation = await pool.query<{
+        id: string;
+        reason: string;
+        summary: string;
+        draft: string | null;
+      }>(
+        `SELECT id, reason, summary, draft FROM escalations
+         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [conversationId],
+      );
+      const row = escalation.rows[0];
+      return Response.json(
+        {
+          conversation_id: conversationId,
+          message_id: existingMessage.id,
           outcome: "escalate",
           answer: null,
           escalation: row
@@ -200,11 +246,16 @@ export async function POST(request: Request): Promise<Response> {
   // Ответ, не прошедший проверку, клиенту не отправляется: 422, а не 200
   // с эскалацией — контракт §2 относит непройденную проверку к 422.
   if (outcome.outcome === "escalate" && outcome.escalation.reason === "validation_failed") {
-    await recordEscalation(pool, tenantId, conversationId, {
+    await recordManagerQueue(pool, {
+      tenantId,
+      conversationId,
+      channel: "web",
       reason: "validation_failed",
       summary: outcome.escalation.summary,
+      result: outcome.escalation.draft ?? outcome.escalation.summary,
       draft: outcome.escalation.draft,
       sources: [],
+      traceRef: conversationId,
     });
     return errorResponse(
       422,
@@ -233,17 +284,63 @@ export async function POST(request: Request): Promise<Response> {
       restoredSources.map((source) => source.text),
     );
     if (!outgoing.valid) {
-      await recordEscalation(pool, tenantId, conversationId, {
+      await recordManagerQueue(pool, {
+        tenantId,
+        conversationId,
+        channel: "web",
         reason: "validation_failed",
         summary: "Ответ не прошёл проверку на персональные данные — передаём менеджеру.",
+        result: "Ответ не прошёл проверку на персональные данные — передаём менеджеру.",
         draft: null,
-        sources: restoredSources,
+        sources: [],
+        traceRef: conversationId,
       });
       return errorResponse(
         422,
         "approval_required",
         "Ответ не прошёл проверку и не отправлен клиенту",
         requestId,
+      );
+    }
+
+    const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
+    const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
+
+    if (shadowMode) {
+      // Режим тени: ответ клиенту не отправляется и в переписку не попадает.
+      // Проверенный ответ сохраняется в очереди менеджера, чтобы решение
+      // о sends принял человек. Текст в очередь идёт замаскированным: сырые
+      // персональные данные в очередь не попадают.
+      const queueId = await recordShadowDraft(pool, {
+        tenantId,
+        conversationId,
+        channel: "web",
+        summary: "Ответ подготовлен и передан менеджеру.",
+        result: outcome.answer.text,
+        sources: restoredSources.map((source) => ({
+          kind: source.kind,
+          id: source.id,
+          title: source.title,
+          location: source.location,
+        })),
+        traceRef: conversationId,
+      });
+
+      return Response.json(
+        {
+          conversation_id: conversationId,
+          message_id: body.message.client_message_id,
+          outcome: "escalate",
+          answer: null,
+          escalation: {
+            id: queueId,
+            reason: SHADOW_REASON,
+            summary: "Ответ подготовлен и передан менеджеру.",
+            draft: outcome.answer.text,
+          },
+          trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
+        },
+        { headers },
       );
     }
 
@@ -268,9 +365,6 @@ export async function POST(request: Request): Promise<Response> {
       ],
     );
 
-    const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
-    const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
-
     return Response.json(
       {
         conversation_id: conversationId,
@@ -292,16 +386,53 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Обычная эскалация остаётся эскалацией: наличие черновика в очереди не
+  // превращает её в разрешение отправить ответ клиенту. Причина исходной
+  // эскалации не переписывается — менеджер должен видеть настоящую причину.
+  //
   // В режиме `off` очередь менеджера не создаётся: вопрос уточняется у
-  // клиента, а не перекладывается менеджеру (ADR-0014).
-  const escalationId = createsManagerQueue()
-    ? await recordEscalation(pool, tenantId, conversationId, {
-        reason: outcome.escalation.reason,
-        summary: outcome.escalation.summary,
-        draft: outcome.escalation.draft,
-        sources: [],
-      })
-    : null;
+  // клиента, а не перекладывается менеджеру (ADR-0014). Режим тени запись
+  // создаёт всегда: результат, который не отправлен клиенту, должен быть
+  // виден менеджеру.
+  const escalationResult = outcome.escalation.draft ?? outcome.escalation.summary;
+  const escalationId =
+    shadowMode || createsManagerQueue()
+      ? await recordManagerQueue(pool, {
+          tenantId,
+          conversationId,
+          channel: "web",
+          reason: outcome.escalation.reason,
+          summary: outcome.escalation.summary,
+          result: escalationResult,
+          draft: outcome.escalation.draft,
+          sources: [],
+          traceRef: conversationId,
+        })
+      : null;
+
+  const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
+  const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
+
+  if (shadowMode) {
+    // В режиме тени клиенту не отправляется ничего, включая уведомление об
+    // эскалации: ответ в переписку не попадает.
+    return Response.json(
+      {
+        conversation_id: conversationId,
+        message_id: body.message.client_message_id,
+        outcome: "escalate",
+        answer: null,
+        escalation: {
+          id: escalationId ?? outcome.escalation.id,
+          reason: outcome.escalation.reason,
+          summary: outcome.escalation.summary,
+          draft: outcome.escalation.draft,
+        },
+        trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
+      },
+      { headers },
+    );
+  }
 
   const agentMessage = await pool.query<{ id: string }>(
     `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
@@ -314,9 +445,6 @@ export async function POST(request: Request): Promise<Response> {
       outcome.escalation.draft ?? outcome.escalation.summary,
     ],
   );
-
-  const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
-  const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
 
   return Response.json(
     {
@@ -383,32 +511,4 @@ async function claimConversation(
     [conversationId, tenantId],
   );
   return true;
-}
-
-/** Запись эскалации в очередь менеджера. */
-async function recordEscalation(
-  pool: Pool,
-  tenantId: string,
-  conversationId: string,
-  escalation: {
-    reason: string;
-    summary: string;
-    draft: string | null;
-    sources: unknown[];
-  },
-): Promise<string> {
-  const result = await pool.query<{ id: string }>(
-    `INSERT INTO escalations (tenant_id, conversation_id, reason, summary, draft, sources, status)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'open')
-     RETURNING id`,
-    [
-      tenantId,
-      conversationId,
-      escalation.reason,
-      escalation.summary,
-      escalation.draft,
-      JSON.stringify(escalation.sources),
-    ],
-  );
-  return result.rows[0]?.id ?? randomUUID();
 }

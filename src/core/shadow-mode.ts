@@ -43,27 +43,39 @@ export type ShadowSource = {
 };
 
 /**
- * Вход записи очереди режима тени.
+ * Вход записи очереди менеджера.
  *
  * Секреты, сырые персональные данные и полный payload трассы в него не
  * принимаются: тип не даёт им попасть в очередь.
  */
-export type ShadowDraftInput = {
+export type ManagerQueueInput = {
   /** Арендатор: запись очереди видна только ему. */
   tenantId: string;
   /** Диалог, к которому относится результат. */
   conversationId: string;
   /** Канал, из которого пришёл результат. */
   channel: "web" | "max";
+  /** Причина: `shadow_mode` или причина исходной эскалации. */
+  reason: string;
   /** Резюме для менеджера. */
   summary: string;
   /** Результат: черновик ответа или резюме эскалации. */
   result: string;
+  /** Черновик ответа. */
+  draft: string | null;
   /** Безопасные метаданные источников ответа. */
   sources: ShadowSource[];
   /** Безопасная ссылка на трассу: идентификатор диалога. */
   traceRef: string;
 };
+
+/**
+ * Вход записи очереди, созданной режимом тени.
+ *
+ * Отдельный тип от `ManagerQueueInput`: у теневой записи причина всегда
+ * `shadow_mode`, и callers не могут её переопределить.
+ */
+export type ShadowDraftInput = Omit<ManagerQueueInput, "reason" | "draft">;
 
 /**
  * Режим тени для арендатора.
@@ -95,6 +107,24 @@ export async function recordShadowDraft(
   pool: ShadowPool,
   input: ShadowDraftInput,
 ): Promise<string> {
+  return recordManagerQueue(pool, {
+    ...input,
+    reason: SHADOW_REASON,
+    draft: input.result,
+  });
+}
+
+/**
+ * Запись в очередь менеджера с произвольной причиной.
+ *
+ * Причина исходной эскалации не переписывается: наличие черновика в очереди
+ * не превращает эскалацию в разрешение отправить ответ клиенту, и менеджер
+ * должен видеть настоящую причину.
+ */
+export async function recordManagerQueue(
+  pool: ShadowPool,
+  input: ManagerQueueInput,
+): Promise<string> {
   const sources = input.sources.map((source) => ({
     kind: source.kind,
     id: source.id,
@@ -107,13 +137,14 @@ export async function recordShadowDraft(
        tenant_id, conversation_id, reason, summary, draft, result,
        sources, channel, trace_ref, status
      )
-     VALUES ($1, $2, $3, $4, $5, $5, $6::jsonb, $7, $8, 'open')
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'open')
      RETURNING id`,
     [
       input.tenantId,
       input.conversationId,
-      SHADOW_REASON,
+      input.reason,
       input.summary,
+      input.draft,
       input.result,
       JSON.stringify(sources),
       input.channel,
