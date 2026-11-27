@@ -11,6 +11,7 @@ import {
   importCrawledPages,
   createDeterministicEmbeddingProvider,
 } from "@/import/knowledge";
+import { scopeEnv } from "../env-scope/helpers";
 
 /**
  * Интеграционный тест среза 13: обход сайта заказчика → извлечение текста →
@@ -72,9 +73,11 @@ describe("Импорт базы знаний с сайта заказчика", 
   let server: Server;
 
   beforeAll(async () => {
-    // Импортёр читает строку подключения из окружения; в тесте она задаётся
-    // локальной базой среза, если не пришла снаружи.
-    process.env["DATABASE_URL"] ??= DATABASE_URL;
+    // Импортёр читает строку подключения из окружения: на время работы
+    // файла она указывает на базу среза. Значение восстанавливается после
+    // файла, поэтому следующий тест не подключается к чужой базе
+    // (аудит B14).
+    scopeEnv("DATABASE_URL", DATABASE_URL);
     pool = new pg.Pool({ connectionString: DATABASE_URL });
     const tenant = await pool.query<{ id: string }>(
       "SELECT id FROM tenants WHERE slug = 'demo-tenant'",

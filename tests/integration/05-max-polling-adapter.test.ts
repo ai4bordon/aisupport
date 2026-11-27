@@ -31,9 +31,15 @@ const TOKEN = "INTEGRATION-MAX-TOKEN-xyz789";
 /**
  * Адрес базы для тестов, которым нужен живой Postgres.
  *
- * Тест выполняется, только если задан `DATABASE_URL` — иначе пропускается.
+ * Строка подключения задаётся конфигом Vitest (vitest.config.ts), поэтому
+ * проверка выполняется всегда: молча пропущенная проверка выглядела бы как
+ * пройденная (аудит B13).
  */
 const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL не задан: конфиг Vitest обязан его задать");
+}
 
 /** Уникальный суффикс slug, чтобы параллельные прогоны не сталкивались. */
 function uniqueSuffix(): string {
@@ -507,7 +513,7 @@ describe("интеграция MAX-канала с ядром", () => {
  * `finally`. Раньше тест ждал пустого состояния и зависел от того, что
  * в общей базе никто не опрашивает MAX: при живом воркере он падал.
  */
-describe.skipIf(!databaseUrl)("маршрут статуса канала MAX", () => {
+describe("маршрут статуса канала MAX", () => {
   it("отдаёт состояние подключения без токена", async () => {
     const pool = createStatePool();
     const slug = `max-status-${uniqueSuffix()}`;
@@ -561,10 +567,8 @@ describe.skipIf(!databaseUrl)("маршрут статуса канала MAX", 
  * Тест самодостаточен: он создаёт собственного арендатора с уникальным
  * slug и удаляет его в `finally`, поэтому проходит на пустой базе с
  * применёнными миграциями и не зависит от данных других прогонов.
- *
- * Тест выполняется, только если задан `DATABASE_URL` — иначе он пропускается.
  */
-describe.skipIf(!databaseUrl)("интеграция MAX-канала с базой", () => {
+describe("интеграция MAX-канала с базой", () => {
   it("сохраняет маркер опроса в channel_state и читает его обратно", async () => {
     const pool = createStatePool();
     const slug = `max-test-${uniqueSuffix()}`;
