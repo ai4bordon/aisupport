@@ -175,25 +175,13 @@ async function readFirstMessages(
 /**
  * Участие менеджера в диалогах — по фактам, которые реально пишет код.
  *
- * Различаются два состояния:
- * - `touched` — менеджер участвовал в диалоге: дело стоит в его очереди
- *   (`escalations`), он закрыл его, ответил в переписке или исполнил
- *   обещание клиенту (`promises` со статусом `done`). Такой диалог агент
- *   закрыть не мог;
- * - `handled` — менеджер дело закрыл: закрыл обращение в очереди, ответил в
- *   переписке или исполнил обещание.
- *
- * Разница нужна для второго варианта автозакрытия: КП, подтверждённое
- * менеджером, — это не «менеджер увидел», а «менеджер подтвердил».
+ * Менеджер участвовал в диалоге, если дело стоит в его очереди
+ * (`escalations`), он закрыл его, ответил в переписке или исполнил
+ * обещание клиенту (`promises` со статусом `done`). Такой диалог агент
+ * закрыть не мог: подтверждение менеджера считается отдельно.
  */
-type ManagerParticipation = {
-  touched: Set<string>;
-  handled: Set<string>;
-};
-
-async function readManagerParticipation(tenantId: string): Promise<ManagerParticipation> {
+async function readManagerTouched(tenantId: string): Promise<Set<string>> {
   const touched = new Set<string>();
-  const handled = new Set<string>();
 
   const replies = await getPool().query<{ conversation_id: string }>(
     `SELECT DISTINCT conversation_id
@@ -201,24 +189,15 @@ async function readManagerParticipation(tenantId: string): Promise<ManagerPartic
       WHERE tenant_id = $1 AND role = 'manager'`,
     [tenantId],
   );
-  for (const row of replies.rows) {
-    touched.add(row.conversation_id);
-    handled.add(row.conversation_id);
-  }
+  for (const row of replies.rows) touched.add(row.conversation_id);
 
-  const escalations = await getPool().query<{
-    conversation_id: string;
-    status: string;
-  }>(
-    `SELECT DISTINCT conversation_id, status
+  const escalations = await getPool().query<{ conversation_id: string }>(
+    `SELECT DISTINCT conversation_id
        FROM escalations
       WHERE tenant_id = $1`,
     [tenantId],
   );
-  for (const row of escalations.rows) {
-    touched.add(row.conversation_id);
-    if (row.status === "closed") handled.add(row.conversation_id);
-  }
+  for (const row of escalations.rows) touched.add(row.conversation_id);
 
   // Исполненное обещание — работа менеджера, а не агента.
   const promises = await getPool().query<{ conversation_id: string }>(
@@ -227,12 +206,9 @@ async function readManagerParticipation(tenantId: string): Promise<ManagerPartic
       WHERE tenant_id = $1 AND status = 'done'`,
     [tenantId],
   );
-  for (const row of promises.rows) {
-    touched.add(row.conversation_id);
-    handled.add(row.conversation_id);
-  }
+  for (const row of promises.rows) touched.add(row.conversation_id);
 
-  return { touched, handled };
+  return touched;
 }
 
 /**
@@ -368,22 +344,23 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    // Намерения диалогов нужны и пробелам в знаниях, и автозакрытию, поэтому
-    // читаются первыми: остальные выборки идут параллельно.
+    // Намерения диалогов нужны пробелам в базе знаний: шаг, где источник не
+    // подтвердился, намерения в себе не несёт. Читаются первыми, остальные
+    // выборки идут параллельно.
     const dialogIntents = await readDialogIntents(tenantId);
 
     const [
       lastSteps,
       dialogCosts,
       firstMessages,
-      manager,
+      managerTouched,
       confirmedQuotes,
       gaps,
     ] = await Promise.all([
       readLastSteps(tenantId),
       readDialogCosts(tenantId),
       readFirstMessages(tenantId),
-      readManagerParticipation(tenantId),
+      readManagerTouched(tenantId),
       readManagerConfirmedQuotes(tenantId),
       readKnowledgeGaps(tenantId, dialogIntents),
     ]);
@@ -418,7 +395,7 @@ export async function GET(request: Request): Promise<Response> {
         withManagerConfirmedQuote += 1;
         continue;
       }
-      if (last?.outcome === "respond" && !manager.touched.has(id)) {
+      if (last?.outcome === "respond" && !managerTouched.has(id)) {
         withoutManager += 1;
       }
     }
