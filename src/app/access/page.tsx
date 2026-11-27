@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import logo from "./softline-logo.png";
 import icon from "./icon.png";
+import { AccessForm } from "./access-form";
 import "./styles.css";
 
 /**
@@ -21,6 +22,13 @@ export const metadata: Metadata = {
   icons: { icon: assetSrc(icon) },
 };
 
+/**
+ * Страница ввода кода доступа к стенду.
+ *
+ * Форма живёт в клиентском компоненте `access-form.tsx`: она отправляет код
+ * через `fetch` JSON-ом и показывает результат. Код доступа в разметку
+ * страницы не попадает — ни в HTML, ни в метаданные.
+ */
 export default function AccessPage() {
   return (
     <main className="sl-access">
@@ -41,27 +49,7 @@ export default function AccessPage() {
           Введите код доступа из описания продукта. Код проверяется на сервере и не сохраняется в браузере.
         </p>
 
-        <form className="sl-access__form" action="/api/access" method="post">
-          <label className="sl-access__label" htmlFor="sl-access-code">
-            Код доступа
-          </label>
-          <input
-            className="sl-access__input"
-            id="sl-access-code"
-            name="code"
-            type="password"
-            autoComplete="off"
-            required
-          />
-          <button className="sl-access__button" type="submit">
-            Войти
-          </button>
-        </form>
-
-        <p className="sl-access__note" role="status">
-          Если код не принят, обновите страницу и попробуйте снова. Лимиты стенда общие для всех
-          посетителей и не обнуляются при повторном входе.
-        </p>
+        <AccessForm />
       </div>
     </main>
   );

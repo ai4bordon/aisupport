@@ -97,9 +97,23 @@
   background: var(--sl-accent-hover);
 }
 
+.sl-access__button:disabled {
+  background: var(--sl-text-muted);
+  cursor: default;
+}
+
 .sl-access__note {
   margin: var(--sl-space-4) 0 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--sl-text-muted);
+}
+
+/* Итог входа: успех и отказ отличаются цветом текста. */
+.sl-access__note--ok {
+  color: var(--sl-text-secondary);
+}
+
+.sl-access__note--error {
+  color: var(--sl-accent);
 }

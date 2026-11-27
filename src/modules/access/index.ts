@@ -27,6 +27,13 @@ export {
 };
 export type { AccessSession };
 
+export {
+  guardRequest,
+  matchProtectedRoute,
+  PROTECTED_ROUTES,
+} from "./guard";
+export type { GuardDecision, GuardRequest, ProtectedRoute } from "./guard";
+
 /** Решение барьера доступа — форма из контракта `docs/api-contract.md` §0.3. */
 export type AccessDecision = {
   allowed: boolean;
