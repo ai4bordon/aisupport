@@ -188,6 +188,11 @@
   font-weight: 700;
 }
 
+.queue-status--overdue {
+  border-color: var(--sl-accent);
+  color: var(--sl-accent);
+}
+
 .queue-card {
   margin: var(--sl-space-3);
   padding: var(--sl-space-3);

@@ -32,6 +32,7 @@ type QueueItem = {
   sources: unknown[];
   status: string;
   sla_due_at: string | null;
+  overdue: boolean;
   created_at: string;
   channel: string;
   result: string;
@@ -170,6 +171,7 @@ export async function GET(request: Request): Promise<Response> {
       promisesByConversation.set(promise.conversation_id, items);
     }
 
+    const now = Date.now();
     const items: QueueItem[] = escalations.rows.map((row) => ({
       id: row.id,
       conversation_id: row.conversation_id,
@@ -179,6 +181,14 @@ export async function GET(request: Request): Promise<Response> {
       sources: row.sources,
       status: row.status,
       sla_due_at: row.sla_due_at?.toISOString() ?? null,
+      // Просрочка считается сервером по сроку SLA, а не отдельным статусом
+      // в базе: набор статусов `escalations` ограничен ('open','closed'),
+      // и менеджеру нужен признак «просрочено» без изменения схемы.
+      overdue:
+        row.status === "overdue" ||
+        (row.status === "open" &&
+          row.sla_due_at !== null &&
+          row.sla_due_at.getTime() < now),
       created_at: row.created_at.toISOString(),
       channel: row.channel,
       result: row.result,

@@ -44,6 +44,7 @@ type QueuePayload = {
     sources: unknown[];
     status: string;
     sla_due_at: string | null;
+    overdue: boolean;
     created_at: string;
     channel: string;
     result: string;
@@ -88,6 +89,7 @@ const samplePayload: QueuePayload = {
       sources: [{ kind: "kb_article", id: "article-1", title: "Условия" }],
       status: "open",
       sla_due_at: null,
+      overdue: false,
       created_at: "2026-11-27T10:00:00.000Z",
       channel: "web",
       result: "Черновик ответа",
@@ -296,6 +298,14 @@ describe("состояния раздела очереди", () => {
     expect(screen.getByText("Условия")).toBeInTheDocument();
   });
 
+  it("показывает просроченное обращение отдельной подписью", async () => {
+    const payload = structuredClone(samplePayload);
+    payload.items[0]!.overdue = true;
+    mockQueueResponse(payload);
+    render(createElement(QueueClient));
+    expect(await screen.findAllByText(/Просрочено/)).not.toHaveLength(0);
+  });
+
   it("выключает нереализованные действия и подписывает их", async () => {
     mockQueueResponse();
     render(createElement(QueueClient));
@@ -398,5 +408,50 @@ describe("маршрут данных очереди", () => {
     const body = (await response.json()) as QueuePayload;
     expect(body.items.every((item) => item.id !== "чужое")).toBe(true);
     expect(body.items).toHaveLength(2);
+  });
+
+  it("считает просрочку по sla_due_at, не меняя статус в базе", async () => {
+    await testPool().query(
+      `INSERT INTO escalations (
+         tenant_id, conversation_id, reason, summary, draft, sources, status,
+         sla_due_at, created_at, channel, result, trace_ref, is_shadow
+       ) VALUES ($1, $2, 'нужен менеджер', 'Просроченное обращение', NULL,
+         '[]'::jsonb, 'open', '2026-11-26T09:00:00.000Z',
+         '2026-11-26T08:00:00.000Z', 'web', 'Просроченное обращение', $2, false)`,
+      [tenantId, oldConversation],
+    );
+    const response = await GET(
+      new Request("http://localhost/api/manager/queue", {
+        headers: { cookie },
+      }),
+    );
+    const body = (await response.json()) as QueuePayload;
+    const item = body.items.find(
+      (entry) => entry.summary === "Просроченное обращение",
+    );
+    expect(item?.overdue).toBe(true);
+    expect(item?.status).toBe("open");
+  });
+
+  it("не считает просрочкой закрытое и не просроченное обращение", async () => {
+    await testPool().query(
+      `INSERT INTO escalations (
+         tenant_id, conversation_id, reason, summary, draft, sources, status,
+         sla_due_at, created_at, channel, result, trace_ref, is_shadow
+       ) VALUES ($1, $2, 'нужен менеджер', 'Закрытое обращение', NULL,
+         '[]'::jsonb, 'closed', '2026-11-26T09:00:00.000Z',
+         '2026-11-26T08:00:00.000Z', 'web', 'Закрытое обращение', $2, false)`,
+      [tenantId, oldConversation],
+    );
+    const response = await GET(
+      new Request("http://localhost/api/manager/queue", {
+        headers: { cookie },
+      }),
+    );
+    const body = (await response.json()) as QueuePayload;
+    const closed = body.items.find((entry) => entry.summary === "Закрытое обращение");
+    const current = body.items.find((entry) => entry.summary === "Новое обращение");
+    expect(closed?.overdue).toBe(false);
+    expect(current?.overdue).toBe(false);
   });
 });

@@ -22,6 +22,7 @@ type QueueItem = {
   sources: Array<{ kind?: string; id?: string; title?: string; location?: string }>;
   status: string;
   sla_due_at: string | null;
+  overdue: boolean;
   created_at: string;
   channel: string;
   result: string;
@@ -42,6 +43,18 @@ const STATUS_LABELS: Record<string, string> = {
   done: "Выполнено",
   overdue: "Просрочено",
 };
+
+/**
+ * Подпись статуса обращения.
+ *
+ * Просрочка приходит сервером отдельным признаком: статус в базе
+ * ограничен ('open','closed'), поэтому «Просрочено» — вычисляемое
+ * состояние по сроку SLA.
+ */
+function statusLabel(status: string, overdue: boolean): string {
+  if (overdue) return "Просрочено";
+  return STATUS_LABELS[status] ?? status;
+}
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -199,7 +212,7 @@ export function QueueClient() {
                         </span>
                         <span className="queue-item-summary">{item.summary}</span>
                         <span className="queue-item-meta">
-                          {item.reason} · {STATUS_LABELS[item.status] ?? item.status}
+                          {item.reason} · {statusLabel(item.status, item.overdue)}
                         </span>
                       </button>
                     </li>
@@ -237,8 +250,10 @@ function QueueDetail({ item }: { item: QueueItem }) {
             {item.reason} · {item.channel === "max" ? "MAX" : "Веб"} · {formatDate(item.created_at)}
           </p>
         </div>
-        <span className="queue-status">
-          {STATUS_LABELS[item.status] ?? item.status}
+        <span
+          className={item.overdue ? "queue-status queue-status--overdue" : "queue-status"}
+        >
+          {statusLabel(item.status, item.overdue)}
         </span>
       </header>
 
