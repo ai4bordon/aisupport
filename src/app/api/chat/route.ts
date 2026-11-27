@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import { ChatRequestSchema } from "@/contracts/chat";
 import { getPool } from "@/db/pool";
 import { getTenantId } from "@/db/tenant";
@@ -22,14 +22,18 @@ import { validateOutgoingText } from "@/core/validate";
  * Порядок: cookie → сверка conversation_id → идемпотентность → маскирование →
  * ядро → восстановление меток → запись хода в базу → ответ по контракту.
  *
- * Идентификация по IP не используется: диалог определяется только
- * подписанной cookie. Значение из тела запроса диалог не определяет — без
- * подписанной cookie клиент получает новый диалог, а значение из тела
- * используется только для сверки повтора.
+ * Диалог определяется только подписанной cookie: клиент не может задать
+ * или подменить `conversation_id` в теле запроса (docs/api-contract.md §4).
+ * Без подписанной cookie создаётся новый диалог, и его идентификатор
+ * возвращается в ответе — клиент продолжает разговор именно с ним.
  */
 
-/** Текст ошибки при отказе по проверке ответа. */
-const APPROVAL_REQUIRED_MESSAGE = "Ответ не прошёл проверку и не отправлен клиенту";
+/** Текст отказа по проверке ответа. */
+const APPROVAL_REQUIRED_MESSAGE =
+  "Ответ не прошёл проверку и не отправлен клиенту";
+
+/** Причина сбоя хода, не прошедшего ядро. */
+const INTERNAL_ERROR_REASON = "internal_error";
 
 function errorResponse(
   status: number,
@@ -50,7 +54,7 @@ function errorResponse(
  *
  * Уникальный индекс `messages (tenant_id, client_message_id)` в схеме общий
  * на весь арендатор, а идемпотентность должна действовать в рамках диалога
- * (docs/api-contract.md §4). Поэтому в колонке хранится не идентификатор
+ * (docs/api-contract.md §4). Поэтому в колонке лежит не идентификатор
  * сообщения клиента, а выведенный из тройки ключ хода: один и тот же
  * `client_message_id` в двух диалогах даёт два разных ключа, и второе
  * сообщение не теряется молча.
@@ -88,7 +92,7 @@ function replyKey(
   );
 }
 
-/** Случайные 16 байт в формате UUID версии 5. */
+/** SHA-256 в формате UUID версии 5. */
 function uuidFromDigest(digest: Buffer): string {
   const bytes = Buffer.from(digest.subarray(0, 16));
   bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
@@ -104,13 +108,13 @@ function uuidFromDigest(digest: Buffer): string {
 }
 
 /**
- * Описание эскалации хода.
+ * Описание результата хода, не отправленного клиенту.
  *
- * Связи «ход → эскалация» в схеме нет, а ответ хода должен восстанавливаться
- * при повторе. Описание хранится в записи сообщения хода: поле `sources`
- * записи-эскалации несёт идентификатор, причину, резюме и черновик.
+ * Связи «ход → эскалация» в схеме нет, а результат хода должен
+ * восстанавливаться при повторе. Описание хранится в записи сообщения хода:
+ * поле `sources` записи несёт идентификатор, причину, резюме и черновик.
  */
-type EscalationDescriptor = {
+type TurnDescriptor = {
   kind: "escalation";
   id: string;
   reason: string;
@@ -123,16 +127,16 @@ type TurnResult = {
   outcome: "respond" | "escalate";
   messageId: string;
   answer: { text: string; sources: unknown[] } | null;
-  escalation: EscalationDescriptor | null;
-  /** Ответ не прошёл проверку и клиенту не отправлялся: повтор даёт тот же отказ. */
+  escalation: TurnDescriptor | null;
+  /** Ответ не прошёл проверку и клиенту не отправлялся: повтор даёт отказ. */
   rejected: boolean;
 };
 
 /**
  * Запись хода в переписку диалога.
  *
- * Сообщение клиента и ответ агента пишутся одной транзакцией: сбой хода не
- * оставляет диалог в полусостоянии (сообщение без ответа).
+ * Сообщение клиента и результат хода пишутся одной транзакцией: сбой хода
+ * не оставляет диалог в полусостоянии (сообщение без ответа).
  *
  * Исходный текст клиента в таблицу не попадает: `text_original` остаётся
  * пустым, исходные значения лежат только в таблице соответствий меток.
@@ -146,12 +150,12 @@ async function writeTurn(
     clientTextMasked: string;
     reply: {
       messageId: string;
-      role: "agent" | "manager";
+      role: "agent" | "system";
       textMasked: string;
       sources: unknown[];
-    } | null;
+    };
   },
-): Promise<void> {
+): Promise<string> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -159,7 +163,7 @@ async function writeTurn(
       await client.query(
         `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
          VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb)
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
         [
           turn.tenantId,
           turn.conversationId,
@@ -167,22 +171,35 @@ async function writeTurn(
           turn.clientTextMasked,
         ],
       );
-      if (turn.reply) {
-        await client.query(
-          `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-           VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb)
-           ON CONFLICT DO NOTHING`,
-          [
-            turn.tenantId,
-            turn.conversationId,
-            turn.reply.messageId,
-            turn.reply.role,
-            turn.reply.textMasked,
-            JSON.stringify(turn.reply.sources),
-          ],
-        );
+      const reply = await client.query<{ id: string }>(
+        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb)
+         ON CONFLICT (tenant_id, client_message_id) DO NOTHING
+         RETURNING id`,
+        [
+          turn.tenantId,
+          turn.conversationId,
+          turn.reply.messageId,
+          turn.reply.role,
+          turn.reply.textMasked,
+          JSON.stringify(turn.reply.sources),
+        ],
+      );
+      const stored = reply.rows[0];
+      if (stored) {
+        await client.query("COMMIT");
+        return stored.id;
       }
+
+      // Ответ хода уже записан: возвращается его идентификатор, чтобы
+      // повтор вернул тот же `message_id`.
+      const existing = await client.query<{ id: string }>(
+        `SELECT id FROM messages
+          WHERE tenant_id = $1 AND client_message_id = $2`,
+        [turn.tenantId, turn.reply.messageId],
+      );
       await client.query("COMMIT");
+      return existing.rows[0]?.id ?? turn.reply.messageId;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -193,39 +210,64 @@ async function writeTurn(
 }
 
 /**
- * Создание диалога, если его ещё нет.
+ * Занятие диалога арендатором.
  *
- * Проверка владельца и вставка атомарны: конфликт по идентификатору означает,
- * что диалог уже существует, и его владелец сверяется отдельно. Возвращается
- * `false`, если диалог принадлежит другому арендатору
- * (docs/data-model.md §5, R15).
+ * Проверка владельца и вставка атомарны: вставка возвращает владельца, а при
+ * конфликте по идентификатору владелец сверяется отдельно. Без этого
+ * проверка и действие были бы разными шагами, и чужой диалог можно было бы
+ * занять (docs/data-model.md §5, R15).
  */
 async function claimConversation(
   pool: Pool,
   tenantId: string,
   conversationId: string,
-  clientRef: string,
-): Promise<boolean> {
+): Promise<{ created: boolean; owned: boolean }> {
   const inserted = await pool.query<{ tenant_id: string }>(
-    `INSERT INTO conversations (id, tenant_id, channel, status, client_ref)
-     VALUES ($1, $2, 'web', 'open', $3)
+    `INSERT INTO conversations (id, tenant_id, channel, status)
+     VALUES ($1, $2, 'web', 'open')
      ON CONFLICT (id) DO NOTHING
      RETURNING tenant_id`,
-    [conversationId, tenantId, clientRef],
+    [conversationId, tenantId],
   );
   const row = inserted.rows[0];
-  if (row) return row.tenant_id === tenantId;
+  if (row) return { created: true, owned: row.tenant_id === tenantId };
 
-  // Конфликт: диалог с таким идентификатором уже есть. Владелец сверяется
-  // отдельно — иначе проверка и вставка были бы разными действиями, и чужой
-  // диалог можно было бы занять.
   const existing = await pool.query<{ tenant_id: string }>(
     "SELECT tenant_id FROM conversations WHERE id = $1",
     [conversationId],
   );
   const found = existing.rows[0];
-  if (!found) return false;
-  return found.tenant_id === tenantId;
+  if (!found) return { created: false, owned: false };
+  return { created: false, owned: found.tenant_id === tenantId };
+}
+
+/**
+ * Диалог нового клиента.
+ *
+ * Без подписанной cookie клиент не может продолжить существующий диалог:
+ * идентификатор из тела запроса служит только для сверки. Если такой
+ * идентификатор ещё не занят, он становится идентификатором нового
+ * диалога; если занят (чужой или прежний), создаётся новый диалог с новым
+ * идентификатором.
+ */
+async function claimNewConversation(
+  pool: Pool,
+  tenantId: string,
+  requestedId: string,
+): Promise<string> {
+  const taken = await pool.query<{ id: string }>(
+    "SELECT id FROM conversations WHERE id = $1",
+    [requestedId],
+  );
+  if (!taken.rows[0]) {
+    const claim = await claimConversation(pool, tenantId, requestedId);
+    if (claim.created) return requestedId;
+  }
+
+  // Идентификатор занят: диалог клиента без cookie всегда новый.
+  const fresh = randomUUID();
+  await claimConversation(pool, tenantId, fresh);
+  return fresh;
 }
 
 /**
@@ -238,30 +280,18 @@ async function claimConversation(
 async function findTurn(
   pool: Pool,
   tenantId: string,
-  conversationIds: string[],
+  conversationId: string,
   clientMessageId: string,
   restore: (text: string) => Promise<string>,
 ): Promise<TurnResult | null> {
-  if (conversationIds.length === 0) return null;
-
-  const keys = conversationIds.map((conversationId) =>
-    turnKey(tenantId, conversationId, clientMessageId),
+  const clientMessage = await pool.query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE tenant_id = $1 AND conversation_id = $2
+        AND client_message_id = $3 AND role = 'client'`,
+    [tenantId, conversationId, turnKey(tenantId, conversationId, clientMessageId)],
   );
-  const clientMessage = await pool.query<{
-    id: string;
-    conversation_id: string;
-  }>(
-    `SELECT id, conversation_id FROM messages
-      WHERE tenant_id = $1 AND role = 'client'
-        AND conversation_id = ANY($2::uuid[])
-        AND client_message_id = ANY($3::uuid[])
-      ORDER BY created_at ASC LIMIT 1`,
-    [tenantId, conversationIds, keys],
-  );
-  const clientRow = clientMessage.rows[0];
-  if (!clientRow) return null;
+  if (!clientMessage.rows[0]) return null;
 
-  const conversationId = clientRow.conversation_id;
   const replyMessageId = replyKey(tenantId, conversationId, clientMessageId);
   const reply = await pool.query<{
     id: string;
@@ -271,40 +301,38 @@ async function findTurn(
   }>(
     `SELECT id, role, text_masked, sources FROM messages
       WHERE tenant_id = $1 AND conversation_id = $2
-        AND client_message_id = $3 AND role IN ('agent', 'manager')`,
+        AND client_message_id = $3 AND role IN ('agent', 'system')`,
     [tenantId, conversationId, replyMessageId],
   );
   const replyRow = reply.rows[0];
-
   if (!replyRow) return null;
 
-  if (replyRow.role === "agent") {
-    const sources = Array.isArray(replyRow.sources) ? replyRow.sources : [];
+  const sources = Array.isArray(replyRow.sources) ? replyRow.sources : [];
+  const descriptor = sources[0] as Partial<TurnDescriptor> | undefined;
+
+  if (descriptor?.kind === "escalation") {
+    const escalation: TurnDescriptor = {
+      kind: "escalation",
+      id: descriptor.id ?? replyRow.id,
+      reason: descriptor.reason ?? "no_confirmed_source",
+      summary: descriptor.summary ?? "",
+      draft: descriptor.draft ?? null,
+    };
     return {
-      outcome: "respond",
-      messageId: replyMessageId,
-      answer: { text: await restore(replyRow.text_masked), sources },
-      escalation: null,
-      rejected: false,
+      outcome: "escalate",
+      messageId: replyRow.id,
+      answer: null,
+      escalation,
+      rejected: escalation.reason === "validation_failed",
     };
   }
 
-  const descriptor = (
-    Array.isArray(replyRow.sources) ? replyRow.sources[0] : undefined
-  ) as Partial<EscalationDescriptor> | undefined;
-  const escalation: EscalationDescriptor = {
-    kind: "escalation",
-    id: descriptor?.id ?? replyRow.id,
-    reason: descriptor?.reason ?? "no_confirmed_source",
-    summary: descriptor?.summary ?? "",
-    draft: descriptor?.draft ?? null,
-  };
   return {
-    outcome: "escalate",
-    messageId: replyMessageId,
-    answer: null,
-    escalation,
-    rejected: escalation.reason === "validation_failed",
+    outcome: "respond",
+    messageId: replyRow.id,
+    answer: { text: await restore(replyRow.text_masked), sources },
+    escalation: null,
+    rejected: false,
   };
 }
 
@@ -373,8 +401,9 @@ export async function POST(request: Request): Promise<Response> {
   // Диалог определяется подписанной cookie; тело только сверяется с ней.
   const cookieConversation = readConversationId(request.headers.get("cookie") ?? undefined);
   if (cookieConversation && cookieConversation.id !== body.conversation_id) {
-    // Идентификатор ожидаемого диалога возвращается в деталях: клиент без
-    // доступа к cookie (HttpOnly) иначе не сможет продолжить диалог.
+    // Идентификатор диалога cookie возвращается в деталях: cookie помечена
+    // `HttpOnly`, и клиент без доступа к ней иначе не сможет продолжить
+    // диалог.
     return errorResponse(
       403,
       "forbidden",
@@ -404,69 +433,84 @@ export async function POST(request: Request): Promise<Response> {
   // её исход (docs/plans/06-shadow-mode.md, шаг 4).
   const shadowMode = await isShadowMode(pool, tenantId);
 
-  // Идентификатор диалога, который знает клиент: подписанная cookie, а без
-  // неё — значение из тела запроса. Он используется только для сверки
-  // повтора: подписанной cookie нет, значит диалог не продолжается.
-  const clientRef = cookieConversation?.id ?? body.conversation_id;
-
-  // Диалоги, в которых ищется повтор хода. С подписанной cookie это ровно
-  // один диалог; без неё — диалоги, созданные клиентом с таким значением.
-  const scope = await conversationScope(pool, tenantId, clientRef, cookieConversation !== null);
-
   // Восстановление меток идёт по таблице соответствий диалога: она общая
   // для всех каналов и накапливает значения ходов диалога.
-  const restore = async (text: string): Promise<string> => {
-    const mapping = await maskStore.load(clientRef);
+  const restore = async (
+    text: string,
+    conversationId: string,
+  ): Promise<string> => {
+    const mapping = await maskStore.load(conversationId);
     return restoreMaskedData(text, mapping);
   };
 
-  // Идемпотентность: повтор client_message_id не создаёт второе обращение.
-  const repeated = await findTurn(
-    pool,
-    tenantId,
-    scope,
-    body.message.client_message_id,
-    restore,
-  );
-  if (repeated) {
-    const headers: Record<string, string> = {};
-    if (cookieConversation === null) {
-      headers["Set-Cookie"] = buildSetCookie(scope[0] ?? randomUUID());
-    }
-    if (repeated.rejected) {
-      return errorResponse(
-        422,
-        "approval_required",
-        APPROVAL_REQUIRED_MESSAGE,
-        requestId,
-      );
-    }
-    return Response.json(
-      {
-        conversation_id: scope[0] ?? clientRef,
-        message_id: repeated.messageId,
-        outcome: repeated.outcome,
-        answer: repeated.answer,
-        escalation: repeated.escalation,
-        trace: { steps: 0, tokens: 0, cost_rub: 0 },
-      },
-      { headers },
-    );
-  }
+  // Диалог, в котором выполняется ход.
+  //
+  // С подписанной cookie это диалог cookie: тело только сверялось с ней
+  // выше. Без подписанной cookie существующий диалог не продолжается:
+  // идентификатор из тела может стать идентификатором нового диалога,
+  // но чужой или прежний диалог по нему не открывается.
+  const conversationId = cookieConversation
+    ? cookieConversation.id
+    : await claimNewConversation(pool, tenantId, body.conversation_id);
 
-  // Диалог, в котором выполняется ход. С подписанной cookie это диалог
-  // cookie. Без неё — новый диалог: значение из тела запроса диалог не
-  // определяет и чужой диалог не продолжает.
-  const conversationId = cookieConversation?.id ?? randomUUID();
-
-  const claimed = await claimConversation(pool, tenantId, conversationId, clientRef);
-  if (!claimed) {
+  const claim = cookieConversation
+    ? await claimConversation(pool, tenantId, conversationId)
+    : { created: true, owned: true };
+  if (!claim.owned) {
     return errorResponse(
       403,
       "forbidden",
       "Диалог принадлежит другому арендатору",
       requestId,
     );
+  }
+
+  const headers: Record<string, string> = {};
+  if (!cookieConversation) {
+    headers["Set-Cookie"] = buildSetCookie(conversationId);
+  }
+
+  // Идемпотентность: повтор client_message_id не создаёт второе обращение.
+  // Повтор распознаётся только в диалоге, подтверждённом cookie: без
+  // подписи диалог не определяется, и чужой диалог по идентификатору из
+  // тела недоступен.
+  if (cookieConversation) {
+    const repeated = await findTurn(
+      pool,
+      tenantId,
+      conversationId,
+      body.message.client_message_id,
+      (text) => restore(text, conversationId),
+    );
+    if (repeated) {
+      if (repeated.rejected) {
+        return errorResponse(
+          422,
+          "approval_required",
+          APPROVAL_REQUIRED_MESSAGE,
+          requestId,
+        );
+      }
+      if (repeated.escalation?.reason === INTERNAL_ERROR_REASON) {
+        return errorResponse(
+          500,
+          "internal_error",
+          "Ход не обработан: сбой агентного цикла",
+          requestId,
+        );
+      }
+      return Response.json(
+        {
+          conversation_id: conversationId,
+          message_id: repeated.messageId,
+          outcome: repeated.outcome,
+          answer: repeated.answer,
+          escalation: repeated.escalation,
+          trace: { steps: 0, tokens: 0, cost_rub: 0 },
+        },
+        { headers },
+      );
+    }
   }
 
   // Маскирование до вызова модели: в модель уходят только метки. Таблица
@@ -501,19 +545,9 @@ export async function POST(request: Request): Promise<Response> {
       tenantId,
     });
   } catch {
-    // Сбой ядра не оставляет диалог в полусостоянии: сообщение клиента и
-    // результат хода пишутся одной транзакцией, а ход с ошибкой
-    // фиксируется как отказ, а не как сообщение без ответа.
+    // Сбой ядра не оставляет диалог в полусостоянии: ход фиксируется как
+    // отказ, а не как сообщение без ответа.
     const summary = "Ход не обработан: сбой агентного цикла.";
-    const escalationId = createsManagerQueue()
-      ? await recordManagerQueueSafely(pool, {
-          tenantId,
-          conversationId,
-          reason: "internal_error",
-          summary,
-          draft: null,
-        })
-      : null;
     await writeTurn(pool, {
       tenantId,
       conversationId,
@@ -521,40 +555,25 @@ export async function POST(request: Request): Promise<Response> {
       clientTextMasked: masked.maskedText,
       reply: {
         messageId: replyMessageId,
-        role: "manager",
+        role: "system",
         textMasked: "",
         sources: [
           {
             kind: "escalation",
-            id: escalationId ?? randomUUID(),
-            reason: "internal_error",
+            id: randomUUID(),
+            reason: INTERNAL_ERROR_REASON,
             summary,
             draft: null,
-          } satisfies EscalationDescriptor,
+          } satisfies TurnDescriptor,
         ],
       },
     });
-    return Response.json(
-      {
-        conversation_id: conversationId,
-        message_id: replyMessageId,
-        outcome: "escalate",
-        answer: null,
-        escalation: {
-          id: escalationId ?? randomUUID(),
-          reason: "internal_error",
-          summary,
-          draft: null,
-        },
-        trace: { steps: 0, tokens: 0, cost_rub: 0 },
-      },
-      { headers: {} },
+    return errorResponse(
+      500,
+      "internal_error",
+      "Ход не обработан: сбой агентного цикла",
+      requestId,
     );
-  }
-
-  const headers: Record<string, string> = {};
-  if (cookieConversation === null) {
-    headers["Set-Cookie"] = buildSetCookie(conversationId);
   }
 
   // Ответ, не прошедший проверку, клиенту не отправляется: 422, а не 200
@@ -574,7 +593,7 @@ export async function POST(request: Request): Promise<Response> {
       clientTextMasked: masked.maskedText,
       reply: {
         messageId: replyMessageId,
-        role: "manager",
+        role: "system",
         // Ответ, отклонённый проверкой, в переписку не попадает: в записи
         // хода остаётся только сам факт отказа.
         textMasked: "",
@@ -585,7 +604,7 @@ export async function POST(request: Request): Promise<Response> {
             reason: "validation_failed",
             summary: outcome.escalation.summary,
             draft: outcome.escalation.draft,
-          } satisfies EscalationDescriptor,
+          } satisfies TurnDescriptor,
         ],
       },
     });
@@ -632,7 +651,7 @@ export async function POST(request: Request): Promise<Response> {
         clientTextMasked: masked.maskedText,
         reply: {
           messageId: replyMessageId,
-          role: "manager",
+          role: "system",
           textMasked: "",
           sources: [
             {
@@ -641,7 +660,7 @@ export async function POST(request: Request): Promise<Response> {
               reason: "validation_failed",
               summary,
               draft: null,
-            } satisfies EscalationDescriptor,
+            } satisfies TurnDescriptor,
           ],
         },
       });
@@ -676,14 +695,14 @@ export async function POST(request: Request): Promise<Response> {
         traceRef: conversationId,
       });
 
-      await writeTurn(pool, {
+      const messageId = await writeTurn(pool, {
         tenantId,
         conversationId,
         clientMessageId: messageKey,
         clientTextMasked: masked.maskedText,
         reply: {
           messageId: replyMessageId,
-          role: "manager",
+          role: "system",
           // Ответ агента в тени клиенту не отправлялся: в переписку он не
           // попадает, запись хода хранит только сам факт обработки.
           textMasked: "",
@@ -694,7 +713,7 @@ export async function POST(request: Request): Promise<Response> {
               reason: SHADOW_REASON,
               summary: "Ответ подготовлен и передан менеджеру.",
               draft: outcome.answer.text,
-            } satisfies EscalationDescriptor,
+            } satisfies TurnDescriptor,
           ],
         },
       });
@@ -702,7 +721,7 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json(
         {
           conversation_id: conversationId,
-          message_id: replyMessageId,
+          message_id: messageId,
           outcome: "escalate",
           answer: null,
           escalation: {
@@ -717,7 +736,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    await writeTurn(pool, {
+    const messageId = await writeTurn(pool, {
       tenantId,
       conversationId,
       clientMessageId: messageKey,
@@ -741,7 +760,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(
       {
         conversation_id: conversationId,
-        message_id: replyMessageId,
+        message_id: messageId,
         outcome: "respond",
         answer: {
           text: restored,
@@ -783,57 +802,15 @@ export async function POST(request: Request): Promise<Response> {
   const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
   const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
 
-  if (shadowMode) {
-    // В режиме тени клиенту не отправляется ничего, включая уведомление об
-    // эскалации: ответ в переписку не попадает.
-    await writeTurn(pool, {
-      tenantId,
-      conversationId,
-      clientMessageId: messageKey,
-      clientTextMasked: masked.maskedText,
-      reply: {
-        messageId: replyMessageId,
-        role: "manager",
-        textMasked: "",
-        sources: [
-          {
-            kind: "escalation",
-            id: escalationId ?? outcome.escalation.id,
-            reason: outcome.escalation.reason,
-            summary: outcome.escalation.summary,
-            draft: outcome.escalation.draft,
-          } satisfies EscalationDescriptor,
-        ],
-      },
-    });
-
-    return Response.json(
-      {
-        conversation_id: conversationId,
-        message_id: replyMessageId,
-        outcome: "escalate",
-        answer: null,
-        escalation: {
-          id: escalationId ?? outcome.escalation.id,
-          reason: outcome.escalation.reason,
-          summary: outcome.escalation.summary,
-          draft: outcome.escalation.draft,
-        },
-        trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
-      },
-      { headers },
-    );
-  }
-
-  await writeTurn(pool, {
+  const messageId = await writeTurn(pool, {
     tenantId,
     conversationId,
     clientMessageId: messageKey,
     clientTextMasked: masked.maskedText,
     reply: {
       messageId: replyMessageId,
-      role: "manager",
-      textMasked: escalationResult,
+      role: "system",
+      textMasked: shadowMode ? "" : escalationResult,
       sources: [
         {
           kind: "escalation",
@@ -841,7 +818,7 @@ export async function POST(request: Request): Promise<Response> {
           reason: outcome.escalation.reason,
           summary: outcome.escalation.summary,
           draft: outcome.escalation.draft,
-        } satisfies EscalationDescriptor,
+        } satisfies TurnDescriptor,
       ],
     },
   });
@@ -849,7 +826,7 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json(
     {
       conversation_id: conversationId,
-      message_id: replyMessageId,
+      message_id: messageId,
       outcome: "escalate",
       answer: null,
       escalation: {
@@ -862,25 +839,4 @@ export async function POST(request: Request): Promise<Response> {
     },
     { headers },
   );
-}
-
-/**
- * Диалоги, в которых ищется повтор хода.
- *
- * С подписанной cookie диалог известен точно. Без неё значение из тела
- * запроса используется только для сверки: им отбираются диалоги, созданные
- * клиентом с таким значением, — продолжать их без cookie нельзя.
- */
-async function conversationScope(
-  pool: Pool,
-  tenantId: string,
-  clientRef: string,
-  signed: boolean,
-): Promise<string[]> {
-  if (signed) return [clientRef];
-  const result = await pool.query<{ id: string }>(
-    "SELECT id FROM conversations WHERE tenant_id = $1 AND client_ref = $2",
-    [tenantId, clientRef],
-  );
-  return result.rows.map((row) => row.id);
 }

@@ -7,6 +7,12 @@ import { useState } from "react";
  *
  * Оформление — только через CSS-переменные из src/app/styles/tokens.css:
  * жёстко прописанных цветов в виджете нет.
+ *
+ * Идентификатор диалога виджет берёт из ответа сервера и помнит его в
+ * состоянии страницы: cookie диалога подписана и помечена `HttpOnly`, из
+ * JavaScript она не читается. На первом ходу идентификатор новый, дальше —
+ * тот же, что вернул сервер: иначе сверка тела с cookie даёт `403` и
+ * виджет работает только один ход за сессию.
  */
 
 type Source = {
@@ -26,10 +32,59 @@ type ChatState = {
 const DEMO_QUESTION =
   "Здравствуйте! Как получить электронную лицензию на программное обеспечение?";
 
+/**
+ * Ключ хранения идентификатора диалога.
+ *
+ * Хранилище выбирается по вкладке: диалог клиента не должен переезжать в
+ * соседнюю вкладку того же браузера.
+ */
+const CONVERSATION_STORAGE_KEY = "support_conversation_id";
+
+/** Идентификатор диалога текущей вкладки или `null`. */
+function readStoredConversationId(): string | null {
+  try {
+    return window.sessionStorage.getItem(CONVERSATION_STORAGE_KEY);
+  } catch {
+    // Приватный режим браузера может запрещать хранилище: тогда диалог
+    // начнётся заново в следующей вкладке.
+    return null;
+  }
+}
+
+/** Запоминает идентификатор диалога для следующих ходов. */
+function storeConversationId(conversationId: string): void {
+  try {
+    window.sessionStorage.setItem(CONVERSATION_STORAGE_KEY, conversationId);
+  } catch {
+    // Хранилище недоступно — ход продолжится с идентификатором из ответа.
+  }
+}
+
 export function Chat() {
   const [messages, setMessages] = useState<ChatState[]>([]);
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(() =>
+    readStoredConversationId(),
+  );
+
+  /** Запрос хода с указанным идентификатором диалога. */
+  async function postMessage(
+    message: string,
+    conversation: string,
+  ): Promise<Response> {
+    // Путь из замороженного контракта (docs/api-contract.md §4).
+    // Маршрут Next обслуживается как /api/chat; переадресацию /v1/chat
+    // добавляет exec в next.config.ts (файл общий, срез его не трогает).
+    return fetch("/v1/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: conversation,
+        message: { client_message_id: crypto.randomUUID(), text: message },
+      }),
+    });
+  }
 
   async function send() {
     const message = text.trim();
@@ -39,20 +94,42 @@ export function Chat() {
     setText("");
     setPending(true);
 
-    try {
-      // Путь из замороженного контракта (docs/api-contract.md §4).
-      // Маршрут Next обслуживается как /api/chat; переадресацию /v1/chat
-      // добавляет exec в next.config.ts (файл общий, срез его не трогает).
-      const response = await fetch("/v1/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversation_id: crypto.randomUUID(),
-          message: { client_message_id: crypto.randomUUID(), text: message },
-        }),
-      });
+    // Первый ход — с новым идентификатором, дальше — с тем, что вернул
+    // сервер: идентификатор из тела запроса должен совпадать с cookie.
+    const requestConversationId = conversationId ?? crypto.randomUUID();
 
-      if (!response.ok) {
+    try {
+      let response = await postMessage(message, requestConversationId);
+
+      if (response.status === 403) {
+        // Идентификатор разошёлся с подписанной cookie (например, хранилище
+        // вкладки очистили, а cookie осталась). Сервер возвращает
+        // идентификатор своего диалога в деталях ошибки — повторяем ход с
+        // ним.
+        const refused = (await response.json().catch(() => null)) as {
+          error?: { details?: { conversation_id?: string } };
+        } | null;
+        const serverConversationId = refused?.error?.details?.conversation_id;
+        if (serverConversationId) {
+          response = await postMessage(message, serverConversationId);
+        }
+      }
+
+      const body = (await response.json().catch(() => null)) as {
+        conversation_id?: string;
+        outcome?: "respond" | "escalate";
+        answer: { text: string; sources: Source[] } | null;
+        escalation: { reason: string; summary: string } | null;
+      } | null;
+
+      // Идентификатор диалога сервера запоминается: следующий ход идёт с
+      // ним, и сверка с cookie проходит.
+      if (body?.conversation_id) {
+        setConversationId(body.conversation_id);
+        storeConversationId(body.conversation_id);
+      }
+
+      if (!response.ok || !body) {
         setMessages((current) => [
           ...current,
           {
@@ -62,12 +139,6 @@ export function Chat() {
         ]);
         return;
       }
-
-      const body = (await response.json()) as {
-        outcome: "respond" | "escalate";
-        answer: { text: string; sources: Source[] } | null;
-        escalation: { reason: string; summary: string } | null;
-      };
 
       if (body.outcome === "respond" && body.answer) {
         setMessages((current) => [
