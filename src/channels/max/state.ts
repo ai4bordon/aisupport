@@ -11,6 +11,11 @@ import type { MaxChannelState, MaxChannelStateStore } from "./adapter";
  *
  * Таблица `channel_state` — миграция `db/migrations/5000_channel_state.sql`.
  * Строка с пустым `external_chat_id` хранит состояние канала целиком.
+ *
+ * Режима тени здесь нет: он живёт в `tenants.shadow_mode` и читается через
+ * общий сервис `src/core/shadow-mode.ts`. Дублирующая колонка удалена
+ * миграцией 6300 — два источника истины разошлись бы, и веб-чат с MAX
+ * показывали бы разные значения одной настройки.
  */
 
 const CHANNEL = "max";
@@ -34,39 +39,30 @@ export function createChannelStateStore(
   return {
     async load(): Promise<MaxChannelState> {
       const result = await pool.query(
-        `SELECT marker, last_event_at, shadow_mode
+        `SELECT marker, last_event_at
            FROM channel_state
           WHERE tenant_id = $1 AND channel = $2 AND external_chat_id = $3`,
         [tenantId, CHANNEL, CHANNEL_SCOPE],
       );
       const row = result.rows[0];
       if (!row) {
-        return { marker: null, lastEventAt: null, shadowMode: false };
+        return { marker: null, lastEventAt: null };
       }
       return {
         marker: row.marker === null || row.marker === undefined ? null : Number(row.marker),
         lastEventAt: row.last_event_at ? new Date(row.last_event_at as string).toISOString() : null,
-        shadowMode: Boolean(row.shadow_mode),
       };
     },
 
     async save(state: MaxChannelState): Promise<void> {
       await pool.query(
-        `INSERT INTO channel_state (tenant_id, channel, external_chat_id, marker, last_event_at, shadow_mode, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
+        `INSERT INTO channel_state (tenant_id, channel, external_chat_id, marker, last_event_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
          ON CONFLICT (tenant_id, channel, external_chat_id)
          DO UPDATE SET marker = EXCLUDED.marker,
                        last_event_at = EXCLUDED.last_event_at,
-                       shadow_mode = EXCLUDED.shadow_mode,
                        updated_at = now()`,
-        [
-          tenantId,
-          CHANNEL,
-          CHANNEL_SCOPE,
-          state.marker,
-          state.lastEventAt,
-          state.shadowMode,
-        ],
+        [tenantId, CHANNEL, CHANNEL_SCOPE, state.marker, state.lastEventAt],
       );
     },
   };

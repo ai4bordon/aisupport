@@ -11,6 +11,7 @@ import {
   type MaxClient,
   type MaxUpdate,
   type PoolLike,
+  type ShadowQueueRecord,
 } from "@/channels/max";
 
 /**
@@ -147,6 +148,62 @@ describe("MAX-канал: обработка события", () => {
       expect(agentCalls).toBe(1);
       expect(client.sent).toHaveLength(0);
     }
+  });
+
+  /**
+   * Режим тени в MAX: `POST /messages` не вызывается, результат попадает в
+   * очередь менеджера (ADR-0008, R10).
+   */
+  it("в режиме тени не вызывает POST /messages и пишет результат в очередь", async () => {
+    const client = stubClient();
+    const queued: ShadowQueueRecord[] = [];
+    const session = await createMaxSession({
+      token: TOKEN,
+      client,
+      runAgent: async () => respondOutcome,
+      shadowMode: async () => true,
+      recordShadowDraft: async (record) => {
+        queued.push(record);
+        return "queue-id-1";
+      },
+    });
+
+    const handled = await handleMaxUpdate(session, update("mid-shadow-queue", 4242));
+
+    expect(handled).toBe("mid-shadow-queue");
+    // Отправки нет вообще: не только текста, но и самого вызова.
+    expect(client.sent).toHaveLength(0);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      channel: "max",
+      result: "Проверенный ответ",
+      traceRef: expect.any(String),
+    });
+    expect(queued[0]?.conversationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("в режиме тени уведомление об эскалации не отправляется, а очередь не дублируется", async () => {
+    const client = stubClient();
+    const queued: ShadowQueueRecord[] = [];
+    const session = await createMaxSession({
+      token: TOKEN,
+      client,
+      runAgent: async () => escalateOutcome,
+      shadowMode: async () => true,
+      recordShadowDraft: async (record) => {
+        queued.push(record);
+        return "queue-id-2";
+      },
+    });
+
+    await handleMaxUpdate(session, update("mid-shadow-escalate", 4242));
+
+    expect(client.sent).toHaveLength(0);
+    // Одна запись на один результат ядра: дубля в очереди быть не должно.
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.channel).toBe("max");
   });
 
   it("повторное событие с тем же идентификатором не создаёт второе обращение", async () => {
@@ -331,7 +388,7 @@ const TENANT = "11111111-1111-4111-8111-111111111111";
 describe("хранилище состояния канала", () => {
   it("читает маркер и время последнего события", async () => {
     const pool = stubPool([
-      { marker: 42, last_event_at: "2026-11-27T10:00:00.000Z", shadow_mode: true },
+      { marker: 42, last_event_at: "2026-11-27T10:00:00.000Z" },
     ]);
     const store = createChannelStateStore(pool, { tenantId: TENANT });
 
@@ -339,7 +396,6 @@ describe("хранилище состояния канала", () => {
 
     expect(state.marker).toBe(42);
     expect(state.lastEventAt).toBe("2026-11-27T10:00:00.000Z");
-    expect(state.shadowMode).toBe(true);
   });
 
   it("возвращает пустое состояние, если строки нет", async () => {
@@ -349,17 +405,18 @@ describe("хранилище состояния канала", () => {
 
     expect(state.marker).toBeNull();
     expect(state.lastEventAt).toBeNull();
-    expect(state.shadowMode).toBe(false);
   });
 
   it("сохраняет состояние с арендатором и каналом", async () => {
     const pool = stubPool();
     const store = createChannelStateStore(pool, { tenantId: TENANT });
 
-    await store.save({ marker: 7, lastEventAt: "2026-11-27T10:00:00.000Z", shadowMode: false });
+    await store.save({ marker: 7, lastEventAt: "2026-11-27T10:00:00.000Z" });
 
     expect(pool.saved).toHaveLength(1);
-    expect(pool.saved[0]?.values).toEqual([TENANT, "max", "", 7, "2026-11-27T10:00:00.000Z", false]);
+    expect(pool.saved[0]?.values).toEqual([TENANT, "max", "", 7, "2026-11-27T10:00:00.000Z"]);
     expect(pool.saved[0]?.text).not.toContain("token");
+    // Режим тени в состоянии канала не хранится: он живёт в `tenants`.
+    expect(pool.saved[0]?.text).not.toContain("shadow_mode");
   });
 });

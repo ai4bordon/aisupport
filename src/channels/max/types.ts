@@ -94,6 +94,44 @@ export type RestorePort = (
   conversationId: string,
 ) => string | Promise<string>;
 
+/**
+ * Порт записи в очередь менеджера для режима тени.
+ *
+ * Канал не знает базы: запись делает общий сервис, подключённый воркером.
+ * Структура повторяет вход `src/core/shadow-mode.ts`, чтобы один и тот же
+ * результат ядра записывался в очередь одинаково из веб-чата и из MAX.
+ */
+export type ShadowQueueRecord = {
+  /** Диалог, к которому относится результат. */
+  conversationId: string;
+  /** Канал-источник. */
+  channel: "web" | "max";
+  /**
+   * Причина записи.
+   *
+   * Для ответа в тени — `shadow_mode`: результат сохранён, но клиенту не
+   * отправлен. Для эскалации — причина исходной эскалации: наличие черновика
+   * в очереди не переписывает настоящую причину.
+   */
+  reason: string;
+  /** Резюме для менеджера. */
+  summary: string;
+  /** Результат: черновик ответа или резюме эскалации. */
+  result: string;
+  /** Безопасные метаданные источников ответа. */
+  sources: Array<{
+    kind: string;
+    id: string;
+    title: string;
+    location?: string | null;
+  }>;
+  /** Безопасная ссылка на трассу: идентификатор диалога. */
+  traceRef: string;
+};
+
+/** Порт записи результата в очередь менеджера. */
+export type ShadowQueuePort = (record: ShadowQueueRecord) => Promise<string>;
+
 /** Состояние подключения канала — `docs/api-contract.md` §0.3 (MaxStatus). */
 export type MaxStatus = {
   running: boolean;

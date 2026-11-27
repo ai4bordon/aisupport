@@ -16,6 +16,7 @@ import { startMaxAdapter, stopMaxAdapter } from "../src/channels/max/adapter";
 import { createChannelStateStore, createStatePool } from "../src/channels/max/state";
 import { maskPersonalData, restoreMaskedData } from "../src/core/mask";
 import { createMaskMappingStore } from "../src/core/mask-store";
+import { isShadowMode, recordManagerQueue } from "../src/core/shadow-mode";
 import { getTenantId } from "../src/db/tenant";
 
 const token = process.env.MAX_BOT_TOKEN ?? "";
@@ -75,10 +76,26 @@ async function main() {
       return restoreMaskedData(text, mapping);
     },
     state,
-    shadowMode: async () => {
-      const current = await state.load();
-      return current.shadowMode;
-    },
+    // Режим тени — одна настройка на оба канала: она живёт в
+    // `tenants.shadow_mode` и читается на каждое событие. Кэш в процессе
+    // сделал бы отключение недействующим до перезапуска.
+    shadowMode: async () => isShadowMode(statePool, tenantId),
+    // В режиме тени результат не отправляется клиенту, а попадает в очередь
+    // менеджера: тот же общий сервис, что и в веб-чате. Причина эскалации не
+    // переписывается — наличие черновика в очереди не превращает эскалацию в
+    // разрешение отправить ответ клиенту.
+    recordShadowDraft: async (record) =>
+      recordManagerQueue(statePool, {
+        tenantId,
+        conversationId: record.conversationId,
+        channel: record.channel,
+        reason: record.reason,
+        summary: record.summary,
+        result: record.result,
+        draft: record.result,
+        sources: record.sources,
+        traceRef: record.traceRef,
+      }),
     logger,
   });
 

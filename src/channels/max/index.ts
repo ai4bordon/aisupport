@@ -44,4 +44,6 @@ export type {
   MaxUpdate,
   NormalizedMessage,
   RestorePort,
+  ShadowQueuePort,
+  ShadowQueueRecord,
 } from "./types";

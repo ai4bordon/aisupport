@@ -504,7 +504,6 @@ describe.skipIf(!databaseUrl)("маршрут статуса канала MAX", 
       await store.save({
         marker: 4242,
         lastEventAt: "2026-11-27T10:00:00.000Z",
-        shadowMode: false,
       });
 
       const response = await getMaxStatusRoute();
@@ -562,13 +561,11 @@ describe.skipIf(!databaseUrl)("интеграция MAX-канала с базо
       await store.save({
         marker: 4242,
         lastEventAt: "2026-11-27T10:00:00.000Z",
-        shadowMode: false,
       });
 
       const state = await store.load();
       expect(state.marker).toBe(4242);
       expect(state.lastEventAt).toBe("2026-11-27T10:00:00.000Z");
-      expect(state.shadowMode).toBe(false);
     } finally {
       // Удаление выполняется и при падении теста, иначе следующий прогон
       // упрётся в остатки предыдущего.

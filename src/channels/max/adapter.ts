@@ -7,6 +7,7 @@ import type {
   MaxUpdate,
   NormalizedMessage,
   RestorePort,
+  ShadowQueuePort,
 } from "./types";
 
 /**
@@ -45,7 +46,6 @@ export type MaxClock = {
 export type MaxChannelState = {
   marker: number | null;
   lastEventAt: string | null;
-  shadowMode: boolean;
 };
 
 /** Хранилище состояния канала: маркер и время последнего события. */
@@ -63,6 +63,13 @@ export type MaxAdapterOptions = {
   runAgent: (input: NormalizedMessage) => Promise<AgentOutcome>;
   /** Порт режима тени. */
   shadowMode: () => Promise<boolean>;
+  /**
+   * Порт записи в очередь менеджера для режима тени.
+   *
+   * Без порта результат в тени просто не отправляется: клиенту ответа нет,
+   * но менеджеру нечего показать.
+   */
+  recordShadowDraft?: ShadowQueuePort;
   /** Отправка сообщения. По умолчанию — клиент Bot API. */
   sendMessage?: (chatId: string, text: string) => Promise<void>;
   /** Порт маскирования ПД ядра. */
@@ -182,7 +189,19 @@ export async function handleMaxUpdate(
   }
   remember(current.seen, message.messageId);
 
+  // Режим тени снимается один раз в начале обработки события и действует на
+  // неё целиком: переключение настройки посередине обработки не должно
+  // менять её исход (docs/plans/06-shadow-mode.md, шаг 4).
+  const shadowMode = await current.options.shadowMode();
+
   const outcome = await current.options.runAgent(message);
+
+  if (shadowMode) {
+    // Режим тени: клиенту не отправляется ничего, включая уведомление об
+    // эскалации. Результат сохраняется в очереди менеджера.
+    await recordShadowResult(current, message, outcome);
+    return message.messageId;
+  }
 
   if (outcome.outcome !== "respond") {
     // Клиент получает нейтральное уведомление о передаче вопроса менеджеру.
@@ -190,15 +209,6 @@ export async function handleMaxUpdate(
     // («ответим в течение часа») продукт не даёт, а тишина в чате выглядит
     // как поломка. Уведомление не содержит черновика и деталей эскалации.
     await notifyEscalation(current, message, outcome.escalation.reason);
-    return message.messageId;
-  }
-
-  if (await current.options.shadowMode()) {
-    current.logger.info(
-      current.log(
-        `MAX: режим тени — ответ для сообщения ${message.messageId} не отправлен`,
-      ),
-    );
     return message.messageId;
   }
 
@@ -217,6 +227,64 @@ export async function handleMaxUpdate(
     current.log(`MAX: ответ отправлен в чат ${chatId} для сообщения ${message.messageId}`),
   );
   return message.messageId;
+}
+
+/**
+ * Сохраняет результат ядра в очереди менеджера в режиме тени.
+ *
+ * Запись одна на один результат: иначе в очереди появился бы дубль, и
+ * менеджер увидел бы один и тот же вопрос дважды.
+ *
+ * Причина эскалации не переписывается: наличие черновика в очереди не
+ * превращает эскалацию в разрешение отправить ответ клиенту.
+ */
+async function recordShadowResult(
+  current: MaxSession,
+  message: NormalizedMessage,
+  outcome: AgentOutcome,
+): Promise<void> {
+  const record = current.options.recordShadowDraft;
+  if (!record) {
+    current.logger.warn(
+      current.log(
+        `MAX: режим тени — очередь менеджера недоступна, результат для сообщения ${message.messageId} не сохранён`,
+      ),
+    );
+    return;
+  }
+
+  const isEscalation = outcome.outcome === "escalate";
+  const result = isEscalation
+    ? outcome.escalation.draft ?? outcome.escalation.summary
+    : outcome.answer.text;
+  const summary = isEscalation
+    ? outcome.escalation.summary
+    : "Ответ подготовлен в режиме тени и не отправлен клиенту.";
+  const reason = isEscalation ? outcome.escalation.reason : "shadow_mode";
+  const sources = isEscalation
+    ? []
+    : outcome.answer.sources.map((source) => ({
+        kind: source.kind,
+        id: source.id,
+        title: source.title,
+        location: source.location ?? null,
+      }));
+
+  await record({
+    conversationId: message.conversationId,
+    channel: "max",
+    reason,
+    summary,
+    result,
+    sources,
+    traceRef: message.conversationId,
+  });
+
+  current.logger.info(
+    current.log(
+      `MAX: режим тени — ответ для сообщения ${message.messageId} не отправлен, результат в очереди менеджера`,
+    ),
+  );
 }
 
 /**
@@ -251,23 +319,18 @@ const ESCALATION_NOTICE =
  * Отправляет клиенту уведомление о передаче вопроса менеджеру.
  *
  * В режиме тени уведомление не отправляется: режим тени запрещает любые
- * сообщения клиенту. Ошибка отправки не роняет опрос — вопрос уже передан
- * менеджеру, клиент увидит статус в веб-кабинете.
+ * сообщения клиенту. Проверка режима уже сделана в начале обработки
+ * события, поэтому здесь её повторять не нужно: повторное чтение могло бы
+ * увидеть уже изменённую настройку.
+ *
+ * Ошибка отправки не роняет опрос — вопрос уже передан менеджеру, клиент
+ * увидит статус в веб-кабинете.
  */
 async function notifyEscalation(
   current: MaxSession,
   message: NormalizedMessage,
   reason: string,
 ): Promise<void> {
-  if (await current.options.shadowMode()) {
-    current.logger.info(
-      current.log(
-        `MAX: режим тени — уведомление об эскалации для сообщения ${message.messageId} не отправлено`,
-      ),
-    );
-    return;
-  }
-
   const chatId = message.externalChatId;
   if (!chatId) {
     return;
@@ -407,7 +470,6 @@ async function pollLoop(current: MaxSession): Promise<void> {
         await current.options.state.save({
           marker: current.marker,
           lastEventAt: current.lastEventAt,
-          shadowMode: await current.options.shadowMode(),
         });
       }
     } catch (error) {
