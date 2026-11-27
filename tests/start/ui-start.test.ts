@@ -8,7 +8,9 @@ import { createElement } from "react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET as maxFeedGet } from "@/app/api/demo/max-feed/route";
-import { MaxFeed } from "@/app/start/max-feed";
+import { BOT_LINK } from "@/app/start/max-bot";
+import { MaxFeed } from "@/app/start/max-tab";
+import { buildQrMatrix } from "@/app/start/qr-matrix";
 import { StartScreen } from "@/app/start/start-screen";
 import { default as StartPage } from "@/app/start/page";
 import { closePool } from "@/db/pool";
@@ -134,6 +136,32 @@ function contrastRatio(left: string, right: string): number {
   const b = luminance(right.replace("#", ""));
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
+
+describe("генератор QR-кода для ссылки на бота", () => {
+  it("строит читаемый код со ссылкой на бота MAX", () => {
+    const matrix = buildQrMatrix(BOT_LINK);
+
+    expect(matrix.size).toBeGreaterThanOrEqual(21);
+    // Поисковые узоры по трём углам обязаны быть на месте.
+    const isDark = (row: number, col: number): boolean =>
+      matrix.modules[row * matrix.size + col] ?? false;
+    expect(isDark(0, 0)).toBe(true);
+    expect(isDark(1, 1)).toBe(false);
+    expect(isDark(0, matrix.size - 7)).toBe(true);
+    expect(isDark(matrix.size - 7, 0)).toBe(true);
+  });
+
+  it("различает разные ссылки: код зависит от содержимого", () => {
+    const first = buildQrMatrix(BOT_LINK);
+    const second = buildQrMatrix("https://max.ru/id381710832195_1_bot");
+
+    expect(first.size).toBe(second.size);
+    const differing = first.modules.filter(
+      (value, index) => value !== second.modules[index],
+    ).length;
+    expect(differing).toBeGreaterThan(0);
+  });
+});
 
 describe("экран демо /start — фирменная раскладка", () => {
   it("в файлах экрана нет сырых цветов: только переменные токенов", async () => {
@@ -351,7 +379,7 @@ describe("экран демо /start — вкладки", () => {
     const page = await StartPage({ searchParams: Promise.resolve({}) });
     render(page);
 
-    expect(screen.getByText(/код доступа/i)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /нужен код доступа/i })).toBeTruthy();
     const link = screen.getByRole("link", { name: /\/access/i });
     expect(link.getAttribute("href")).toBe("/access");
     expect(screen.queryByRole("tablist")).toBeNull();
@@ -371,8 +399,13 @@ describe("экран демо /start — живая лента MAX", () => {
   });
 
   it("показывает состояние загрузки, ошибки и пустоты", async () => {
-    const { promise, resolve } = Promise.withResolvers<Response>();
-    const fetchMock = vi.fn(() => promise);
+    let resolvePending: ((value: Response) => void) | null = null;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvePending = resolve;
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const view = render(createElement(MaxFeed));
@@ -380,7 +413,7 @@ describe("экран демо /start — живая лента MAX", () => {
     expect(screen.getByText(/загружаем ленту/i)).toBeTruthy();
 
     await act(async () => {
-      resolve(
+      resolvePending?.(
         new Response(JSON.stringify({ messages: [], empty: true }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -449,8 +482,24 @@ describe("маршрут GET /api/demo/max-feed", () => {
   beforeEach(async () => {
     process.env.ACCESS_CODE = ACCESS_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
+    await clearChannelState();
     tenantId = await resetTenant(TENANT_SLUG);
   });
+
+  /**
+   * Удаление строк состояния канала тестового арендатора.
+   *
+   * На `channel_state` стоит внешний ключ на арендатора, а общий помощник
+   * очистки её не трогает: без этой очистки арендатор не удалится и тест
+   * упадёт на посторонней ошибке.
+   */
+  async function clearChannelState(): Promise<void> {
+    await ensureSchema();
+    await testPool().query(
+      "DELETE FROM channel_state WHERE tenant_id IN (SELECT id FROM tenants WHERE slug = $1)",
+      [TENANT_SLUG],
+    );
+  }
 
   afterAll(async () => {
     await closePool();

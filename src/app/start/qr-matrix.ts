@@ -24,9 +24,6 @@ const VERSION_SPECS = [
   { total: 346, ec: 26, blocks: 5 },
 ] as const;
 
-/** Остаточные биты версий 1–10: ими заполняется конец символа. */
-const REMAINDER_BITS = [0, 7, 7, 7, 7, 7, 0, 0, 0, 0] as const;
-
 /** Центры выравнивающих узоров версий 1–10. */
 const ALIGNMENT_CENTERS = [
   [],
@@ -398,9 +395,9 @@ export function buildQrMatrix(text: string): QrMatrix {
   }
 
   // Размещение данных: зигзаг снизу вверх, справа налево, колонками по две.
+  // Модули за кодовыми словами — остаточные биты версии, они всегда нулевые.
   const codewords = interleave(encodeData(text, version), version);
   let bitIndex = 0;
-  const totalBits = codewords.length * 8 + REMAINDER_BITS[version - 1];
   for (let right = size - 1; right >= 1; right -= 2) {
     if (right === 6) right = 5;
     for (let vertical = 0; vertical < size; vertical += 1) {
@@ -418,7 +415,6 @@ export function buildQrMatrix(text: string): QrMatrix {
       }
     }
   }
-  void totalBits;
 
   // Выбор маски по минимальному штрафу; поле формата зависит от маски,
   // поэтому оно переносится внутрь перебора.

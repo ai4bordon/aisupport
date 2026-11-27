@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 
 import { createChannelStateStore, createStatePool } from "@/channels/max";
 import { getTenantId } from "@/db/tenant";
-import { accessHttpStatus, checkAccess } from "@/modules/access";
+import { readAccessSession } from "@/modules/access/session";
 import { isShadowMode } from "@/core/shadow-mode";
+
+import { BOT_LINK, BOT_USERNAME } from "@/app/start/max-bot";
 
 /**
  * `GET /api/demo/max-feed` — живая лента канала MAX для экрана демо `/start`.
@@ -17,8 +19,11 @@ import { isShadowMode } from "@/core/shadow-mode";
  * принимается. Пустое состояние — пустой массив и признак `empty`, а не
  * ошибка: на демо лента может быть пустой, и это не поломка.
  *
- * Барьер доступа на `/api/demo/*` мидлваре не навешивает, поэтому проверка
- * клиентского кода (`support_access`) делается здесь через общий `checkAccess`.
+ * Доступ проверяется по подписанной cookie стенда (`support_access`).
+ * Общий барьер `checkAccess` здесь не вызывается намеренно: он считает
+ * лимит запросов по IP, а лента обновляется раз в три секунды и одна страница
+ * выбила бы этот лимит. Проверка сессии барьер не обходит — она требует ровно
+ * ту же подписанную cookie, что и остальной стенд.
  */
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
@@ -28,12 +33,6 @@ const CHANNEL = "max";
 
 /** Сколько последних сообщений показывается в ленте. */
 const FEED_LIMIT = 20;
-
-/** Имя бота MAX в публичной ссылке. */
-const BOT_USERNAME = "se15151074_bot";
-
-/** Публичная ссылка на бота: формат `max.ru/<никнейм>`. */
-const BOT_LINK = `https://max.ru/${BOT_USERNAME}`;
 
 /** Сообщение ленты в безопасном виде. */
 type FeedMessage = {
@@ -106,14 +105,11 @@ async function loadMessages(
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const decision = await checkAccess({
-    cookieHeader: request.headers.get("cookie"),
-    ip: request.headers.get("x-forwarded-for") ?? "0.0.0.0",
-  });
-  if (!decision.allowed) {
+  const session = readAccessSession(request.headers.get("cookie"));
+  if (!session) {
     return errorResponse(
-      accessHttpStatus(decision),
-      decision.reason,
+      401,
+      "unauthorized",
       "Лента MAX доступна по коду демонстрационного стенда",
     );
   }
