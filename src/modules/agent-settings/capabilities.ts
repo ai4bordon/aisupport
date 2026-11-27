@@ -23,6 +23,8 @@ export type CapabilityDescriptor = {
   reason: string | null;
   /** Вид элемента управления. */
   control: CapabilityControl;
+  /** Доступные значения для select: null, если не select. */
+  options?: string[];
 };
 
 /**
@@ -33,6 +35,25 @@ export type CapabilityDescriptor = {
  * модели, `system_prompt` — ядро, `shadow_mode` — сервис режима тени
  * (`tenants.shadow_mode`, ADR-0008).
  */
+/** Модели, доступные через подписку OpenCode Go (GET /v1/models). */
+const AVAILABLE_MODELS: string[] = [
+  "deepseek-v4.1-flash",
+  "deepseek-v4-pro",
+  "glm-5.3",
+  "glm-5.3-flash",
+  "grok-4.7",
+  "gpt-5.6-luna",
+  "gpt-6-luna",
+  "claude-haiku-5-5",
+  "claude-sonnet-5-5",
+  "claude-opus-5-5",
+  "kimi-k2.7-code",
+  "kimi-k3",
+  "mimo-v2.6-flash",
+  "muse-spark-1.2-contributor",
+  "muse-spark-1.3-contributor",
+];
+
 export const CAPABILITIES: CapabilityDescriptor[] = [
   {
     key: "provider",
@@ -46,7 +67,8 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
     label: "Модель",
     supported: true,
     reason: null,
-    control: "text",
+    control: "select",
+    options: AVAILABLE_MODELS,
   },
   {
     key: "endpoint",

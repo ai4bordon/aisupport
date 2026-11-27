@@ -51,12 +51,26 @@ export function SettingsForm({
           .map((capability) => (
             <label className="sl-settings__field" key={capability.key}>
               <span className="sl-settings__label">{capability.label}</span>
-              <input
-                className="sl-settings__input"
-                name={capability.key}
-                type={capability.control === "select" ? "text" : "text"}
-                defaultValue={String(values[capability.key] ?? "")}
-              />
+              {capability.control === "select" && capability.options ? (
+                <select
+                  className="sl-settings__input"
+                  name={capability.key}
+                  defaultValue={String(values[capability.key] ?? "")}
+                >
+                  {capability.options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="sl-settings__input"
+                  name={capability.key}
+                  type="text"
+                  defaultValue={String(values[capability.key] ?? "")}
+                />
+              )}
             </label>
           ))}
         <p className="sl-settings__note">
