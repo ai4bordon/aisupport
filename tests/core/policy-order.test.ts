@@ -215,4 +215,89 @@ describe("порядок проверки полномочий", () => {
 
     expect(outcome.outcome).toBe("respond");
   });
+
+  it("вопрос о возврате уходит менеджеру, даже если отнесён к сведениям о продукте", async () => {
+    // Регрессия: модель относит вопрос о возврате к `company_info`, и этот
+    // класс был исключён из проверки полномочий — покупатель получал ответ
+    // по возврату, минуя менеджера (ADR-0019).
+    setModelClient({
+      complete: async (request: ModelRequest): Promise<ModelResult> => {
+        const prompt = request.messages.map((message) => message.content).join(" ");
+        if (prompt.includes("Ответь одним кодом")) {
+          return {
+            text: "company_info",
+            amounts: [],
+            citations: [],
+            tokensIn: 1,
+            tokensOut: 1,
+            costRub: 0,
+            model: "stub",
+          };
+        }
+        return {
+          text: ARTICLE_TEXT,
+          amounts: [],
+          citations: [ARTICLE_TEXT],
+          tokensIn: 1,
+          tokensOut: 1,
+          costRub: 0,
+          model: "stub",
+        };
+      },
+    });
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: crypto.randomUUID(),
+      channel: "web",
+      externalChatId: null,
+      text: "Какие условия возврата по лицензии?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("escalate");
+    if (outcome.outcome !== "escalate") return;
+    expect(outcome.escalation.reason).toBe("policy_denied");
+  });
+
+  it("вопрос о поддержке клиенту отвечает без проверки полномочий", async () => {
+    setModelClient({
+      complete: async (request: ModelRequest): Promise<ModelResult> => {
+        const prompt = request.messages.map((message) => message.content).join(" ");
+        if (prompt.includes("Ответь одним кодом")) {
+          return {
+            text: "company_info",
+            amounts: [],
+            citations: [],
+            tokensIn: 1,
+            tokensOut: 1,
+            costRub: 0,
+            model: "stub",
+          };
+        }
+        return {
+          text: ARTICLE_TEXT,
+          amounts: [],
+          citations: [ARTICLE_TEXT],
+          tokensIn: 1,
+          tokensOut: 1,
+          costRub: 0,
+          model: "stub",
+        };
+      },
+    });
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: crypto.randomUUID(),
+      channel: "web",
+      externalChatId: null,
+      text: "Какая у вас поддержка?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("respond");
+  });
 });
