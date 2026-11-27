@@ -57,7 +57,7 @@ export const MANAGER_SECTIONS: ManagerSection[] = [
     label: "Агент",
     href: "/manager/agent",
     anchor: "section-agent",
-    status: "in-progress",
+    status: "ready",
     summary: "Настройки агента: модель, инструменты, промпт, лимиты, режим тени.",
   },
   {
@@ -65,7 +65,7 @@ export const MANAGER_SECTIONS: ManagerSection[] = [
     label: "Аналитика",
     href: "/manager/analytics",
     anchor: "section-analytics",
-    status: "in-progress",
+    status: "ready",
     summary: "Воронка обработки, автозакрытие, стоимость запроса и экономия.",
   },
   {
