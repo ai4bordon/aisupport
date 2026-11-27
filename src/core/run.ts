@@ -22,9 +22,16 @@ import {
 import { loadSlots, saveSlots } from "@/core/slots";
 import { stripUrls } from "@/core/no-urls";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
-import { validateAnswer } from "@/core/validate";
+import { validateAnswer, validatePromise } from "@/core/validate";
+import {
+  candidateFromAnswer,
+  extractPromise,
+  stripPromiseMarker,
+  type ConfirmedSource,
+} from "@/core/promise-extract";
 import { currentEmbeddingProvider, search } from "@/modules/knowledge";
 import { check, ruleKeyForRequest } from "@/modules/policy";
+import { recordPromise } from "@/modules/promises";
 import { recordStep } from "@/modules/telemetry";
 import type { AgentStep } from "@/modules/telemetry";
 
@@ -856,6 +863,159 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     );
   }
 
+  // Узел 6: обязательство (R11, ADR-0018).
+  //
+  // Обещание допустимо только из подтверждённого источника: срок и
+  // ответственный сверяются с текстом источника кодом, а не доверием
+  // формулировке модели. При отказе запись не создаётся, и клиенту не уходит
+  // ни срок, ни ответственный — вопрос уходит менеджеру.
+  const promiseStartedAt = nowMs();
+  const confirmedSources: ConfirmedSource[] = sources.map((source) => ({
+    kind: source.kind,
+    id: source.id,
+    text: source.text,
+    title: source.title,
+    location: source.location,
+  }));
+
+  const candidate = candidateFromAnswer(generatedText, {
+    channel: input.channel,
+    externalChatId: input.externalChatId,
+    clientText: input.text,
+    contactEmail: null,
+  }, confirmedSources);
+
+  if (candidate === null) {
+    await pushStep({
+      node: "promise",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: elapsedSince(promiseStartedAt),
+      metadata: { outcome: "none" },
+      sourceIds: sources.map((source) => source.id),
+      outcome: null,
+      model,
+    });
+  } else {
+    const extraction = extractPromise(candidate, confirmedSources);
+
+    if (extraction.kind === "rejected") {
+      await pushStep({
+        node: "promise",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: elapsedSince(promiseStartedAt),
+        metadata: {
+          outcome: "rejected",
+          reason: extraction.reason,
+          detail: extraction.detail,
+        },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      await pushStep({
+        node: "escalate",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: 0,
+        metadata: { reason: "no_confirmed_source" },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      return escalationOutcome(
+        "no_confirmed_source",
+        "Срок не подтверждён источником — передаём менеджеру без обязательств.",
+        null,
+        steps,
+      );
+    }
+
+    const promise = extraction.promise;
+    const promiseCheck = validatePromise(
+      { text: promise.text, deadlinePhrase: promise.deadlinePhrase },
+      sources,
+    );
+    if (!promiseCheck.valid) {
+      await pushStep({
+        node: "promise",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: elapsedSince(promiseStartedAt),
+        metadata: {
+          outcome: "rejected",
+          reason: promiseCheck.violations[0]?.code ?? "validation_failed",
+          detail: promiseCheck.violations[0]?.detail ?? "",
+        },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      await pushStep({
+        node: "escalate",
+        endpoint: null,
+        tokensIn: 0,
+        tokensOut: 0,
+        costRub: 0,
+        latencyMs: 0,
+        metadata: { reason: "validation_failed" },
+        sourceIds: sources.map((source) => source.id),
+        outcome: "escalate",
+        model,
+      });
+      return escalationOutcome(
+        "validation_failed",
+        "Обязательство не прошло проверку по источникам и персональным данным — передаём менеджеру.",
+        null,
+        steps,
+      );
+    }
+
+    await recordPromise({
+      tenantId,
+      conversationId: input.conversationId,
+      text: promise.text,
+      dueAt: promise.dueAt,
+      owner: promise.owner,
+      sourceKind: promise.sourceKind,
+      sourceId: promise.sourceId,
+      channel: promise.channel,
+      contactEmail: promise.contactEmail,
+      contactLabel: promise.contactLabel,
+      externalChatId: promise.externalChatId,
+    });
+
+    await pushStep({
+      node: "promise",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: elapsedSince(promiseStartedAt),
+      metadata: {
+        outcome: "recorded",
+        sourceKind: promise.sourceKind,
+        sourceId: promise.sourceId,
+        channel: promise.channel,
+        // В трассу уходит метка адреса, а не исходное значение: адрес —
+        // персональные данные.
+        contactLabel: promise.contactLabel,
+      },
+      sourceIds: sources.map((source) => source.id),
+      outcome: null,
+      model,
+    });
+  }
+
   await pushStep({
     node: "respond",
     endpoint: "POST /agent/respond",
@@ -873,7 +1033,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     outcome: "respond",
     // Ссылки в текст ответа не попадают: они остаются в `sources`, в трассе
     // и в кабинете менеджера.
-    answer: { text: stripUrls(generatedText), sources },
+    answer: { text: stripUrls(stripPromiseMarker(generatedText)), sources },
     escalation: null,
     steps,
   };

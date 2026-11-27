@@ -70,6 +70,8 @@ export type PromiseCandidate = {
 export type ExtractedPromise = {
   text: string;
   dueAt: string;
+  /** Формулировка срока так, как она написана в источнике. */
+  deadlinePhrase: string;
   owner: string;
   sourceKind: string;
   sourceId: string;
@@ -412,6 +414,7 @@ export function extractPromise(
     promise: {
       text: candidate.text,
       dueAt: deadline.dueAt,
+      deadlinePhrase: deadline.phrase,
       owner,
       sourceKind: source.kind,
       sourceId: source.id,

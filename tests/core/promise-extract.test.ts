@@ -31,11 +31,15 @@ let tenantId = "";
 let conversationId = "";
 
 function maxCandidate(text: string): PromiseCandidate | null {
-  return candidateFromAnswer(text, {
-    channel: "max",
-    externalChatId: "chat-1",
-    clientText: null,
-  });
+  return candidateFromAnswer(
+    text,
+    {
+      channel: "max",
+      externalChatId: "chat-1",
+      clientText: null,
+    },
+    SOURCES,
+  );
 }
 
 describe("извлечение обещания из подтверждённого источника", () => {
@@ -58,7 +62,9 @@ describe("извлечение обещания из подтверждённо�
   });
 
   it("подтверждённый срок даёт обещание с ответственным из источника", () => {
-    const candidate = maxCandidate("Обещаем отправить счёт. ОБЕЩАНИЕ: в течение 120 минут");
+    const candidate = maxCandidate(
+      "ОБЕЩАНИЕ: Обещаем отправить счёт | срок: 120 минут | источник: [1]",
+    );
     expect(candidate).not.toBeNull();
 
     const extraction = extractPromise(candidate as PromiseCandidate, SOURCES);
@@ -69,11 +75,15 @@ describe("извлечение обещания из подтверждённо�
     expect(extraction.promise.sourceId).toBe("article-1");
     expect(extraction.promise.owner).toBe("менеджер по продажам");
     expect(extraction.promise.text).toContain("Обещаем отправить счёт");
+    expect(extraction.promise.channel).toBe("max");
+    expect(extraction.promise.externalChatId).toBe("chat-1");
     expect(Number.isNaN(Date.parse(extraction.promise.dueAt))).toBe(false);
   });
 
   it("без источников обещание отклоняется с кодом no_confirmed_source", () => {
-    const candidate = maxCandidate("Обещаем отправить счёт. ОБЕЩАНИЕ: в течение 120 минут");
+    const candidate = maxCandidate(
+      "ОБЕЩАНИЕ: Обещаем отправить счёт | срок: 120 минут | источник: [1]",
+    );
 
     const extraction = extractPromise(candidate as PromiseCandidate, []);
 
@@ -83,7 +93,9 @@ describe("извлечение обещания из подтверждённо�
   });
 
   it("срок, которого нет в тексте источника, отклоняется с кодом deadline_not_in_source", () => {
-    const candidate = maxCandidate("ОБЕЩАНИЕ: в течение 999 минут");
+    const candidate = maxCandidate(
+      "ОБЕЩАНИЕ: Обещаем отправить счёт | срок: 999 минут | источник: [1]",
+    );
 
     const extraction = extractPromise(candidate as PromiseCandidate, SOURCES);
 
@@ -93,7 +105,6 @@ describe("извлечение обещания из подтверждённо�
   });
 
   it("ответственный по умолчанию — manager, если источник его не называет", () => {
-    const candidate = maxCandidate("ОБЕЩАНИЕ: в течение 120 минут");
     const sources: ConfirmedSource[] = [
       {
         kind: "kb_article",
@@ -101,6 +112,11 @@ describe("извлечение обещания из подтверждённо�
         text: "Электронная лицензия предоставляется в течение 120 минут после оплаты.",
       },
     ];
+    const candidate = candidateFromAnswer(
+      "ОБЕЩАНИЕ: Обещаем отправить счёт | срок: 120 минут | источник: [1]",
+      { channel: "max", externalChatId: "chat-1", clientText: null },
+      sources,
+    );
 
     const extraction = extractPromise(candidate as PromiseCandidate, sources);
 
