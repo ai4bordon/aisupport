@@ -272,8 +272,8 @@ describe("интеграционная проверка среза 07", () => {
 
     await agentRun(
       agentRequest({
-        conversation_id: "4a1b2c3d-1111-4111-8111-111111111111",
-        message_id: "4a1b2c3d-2222-4222-8222-222222222222",
+        conversation_id: "e4a1b2c3-1111-4111-8111-111111111111",
+        message_id: "e4a1b2c3-2222-4222-8222-222222222222",
         channel: "max",
         external_chat_id: "chat-1004",
         text: CLIENT_QUESTION,
@@ -296,9 +296,9 @@ describe("интеграционная проверка среза 07", () => {
 
     const response = await chat(
       chatRequest({
-        conversation_id: "5a1b2c3d-1111-4111-8111-111111111111",
+        conversation_id: "e5a1b2c3-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "5a1b2c3d-2222-4222-8222-222222222222",
+          client_message_id: "e5a1b2c3-2222-4222-8222-222222222222",
           text: CLIENT_QUESTION,
         },
       }),
@@ -322,9 +322,9 @@ describe("интеграционная проверка среза 07", () => {
 
     const response = await chat(
       chatRequest({
-        conversation_id: "6a1b2c3d-1111-4111-8111-111111111111",
+        conversation_id: "e6a1b2c3-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "6a1b2c3d-2222-4222-8222-222222222222",
+          client_message_id: "e6a1b2c3-2222-4222-8222-222222222222",
           text: `${CLIENT_QUESTION} Пришлите на client@example.com`,
         },
       }),
@@ -364,8 +364,8 @@ describe("интеграционная проверка среза 07", () => {
 
     const response = await agentRun(
       agentRequest({
-        conversation_id: "7a1b2c3d-1111-4111-8111-111111111111",
-        message_id: "7a1b2c3d-2222-4222-8222-222222222222",
+        conversation_id: "e7a1b2c3-1111-4111-8111-111111111111",
+        message_id: "e7a1b2c3-2222-4222-8222-222222222222",
         channel: "max",
         external_chat_id: "chat-4242",
         text: CLIENT_QUESTION,
@@ -402,9 +402,12 @@ describe("интеграционная проверка среза 07", () => {
 
     await chat(
       chatRequest({
-        conversation_id: "8a1b2c3d-1111-4111-8111-111111111111",
+        // UUID диалога уникален для среза: общий с другим тестом диалог
+        // принадлежал бы чужому арендатору, и веб-роут отклонил бы запрос
+        // с 403 до записи обещания.
+        conversation_id: "c7a1b2c3-1111-4111-8111-111111111111",
         message: {
-          client_message_id: "8a1b2c3d-2222-4222-8222-222222222222",
+          client_message_id: "c7a1b2c3-2222-4222-8222-222222222222",
           text: `${CLIENT_QUESTION} Пришлите на client@example.com`,
         },
       }),
@@ -421,14 +424,14 @@ describe("интеграционная проверка среза 07", () => {
     // Исходное значение лежит в таблице соответствий диалога.
     const mask = await testPool().query<{ value: string }>(
       `SELECT value FROM conversation_mask
-        WHERE conversation_id = '8a1b2c3d-1111-4111-8111-111111111111'`,
+        WHERE conversation_id = 'c7a1b2c3-1111-4111-8111-111111111111'`,
     );
     expect(mask.rows[0]?.value).toBe("client@example.com");
 
     // В трассе адреса нет: только метка.
     const steps = await testPool().query<{ metadata: Record<string, unknown> }>(
       `SELECT metadata FROM agent_steps
-        WHERE conversation_id = '8a1b2c3d-1111-4111-8111-111111111111'`,
+        WHERE conversation_id = 'c7a1b2c3-1111-4111-8111-111111111111'`,
     );
     const trace = JSON.stringify(steps.rows.map((row) => row.metadata));
     expect(trace).toContain("⟦EMAIL_1⟧");
