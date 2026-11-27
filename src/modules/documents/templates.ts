@@ -12,8 +12,7 @@
  * заказчика `Агент поддержки-20261126T080905Z-1-001/Агент поддержки/Шаблон КП ПАО Софтлайн.pdf`.
  */
 
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -123,9 +122,36 @@ export type FontKey = "cyrillic" | "latin";
 
 export type FontWeight = 400 | 600;
 
+/**
+ * Каталог пакета `@fontsource/montserrat`.
+ *
+ * Путь ищется в `node_modules` вручную, а не через `require.resolve`:
+ * в собранном бандле Next.js `require.resolve` перехватывается загрузчиком
+ * и возвращает идентификатор модуля вместо пути, из-за чего сборка падала на
+ * этапе сбора данных страницы. Перебор корней работает и в Node, и в бандле.
+ */
 function packageRoot(): string {
-  const require = createRequire(import.meta.url);
-  return dirname(require.resolve("@fontsource/montserrat/package.json"));
+  const roots = [process.cwd(), dirname(fileURLToPath(import.meta.url))];
+  for (const root of roots) {
+    let current = root;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const candidate = join(
+        current,
+        "node_modules",
+        "@fontsource",
+        "montserrat",
+      );
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  // Крайний случай: пакет не найден — путь останется осмысленным, и ошибка
+  // проявится при чтении файла шрифта, а не как «path argument must be string».
+  return join(process.cwd(), "node_modules", "@fontsource", "montserrat");
 }
 
 function fontFile(key: FontKey, weight: FontWeight): string {
