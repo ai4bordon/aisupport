@@ -4,9 +4,10 @@ import { ChatRequestSchema } from "@/contracts/chat";
 import { getPool } from "@/db/pool";
 import { getTenantId } from "@/db/tenant";
 import { maskPersonalData, restoreMaskedData } from "@/core/mask";
+import { createsManagerQueue } from "@/core/escalation-mode";
 import { runAgent } from "@/core/run";
 import { buildSetCookie, readConversationId } from "@/core/session";
-import { validateAnswer } from "@/core/validate";
+import { validateOutgoingText } from "@/core/validate";
 
 /**
  * POST /v1/chat — веб-чат (docs/api-contract.md §4).
@@ -222,10 +223,14 @@ export async function POST(request: Request): Promise<Response> {
     // после восстановления в ответе не должно оказаться сырых данных.
     // Значения, восстановленные по таблице соответствий, утечкой не
     // считаются: клиент законно получает свои же данные обратно.
-    const outgoing = validateAnswer(
-      { text: restored, amounts: [], citations: [] },
-      restoredSources,
+    //
+    // Проверяются только персональные данные: источник для ответа без
+    // фактов (приветствие, уточняющий вопрос) не требуется, а факты
+    // подтверждены источниками ещё в ядре.
+    const outgoing = validateOutgoingText(
+      restored,
       Object.values(masked.mapping),
+      restoredSources.map((source) => source.text),
     );
     if (!outgoing.valid) {
       await recordEscalation(pool, tenantId, conversationId, {
@@ -287,12 +292,16 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const escalationId = await recordEscalation(pool, tenantId, conversationId, {
-    reason: outcome.escalation.reason,
-    summary: outcome.escalation.summary,
-    draft: outcome.escalation.draft,
-    sources: [],
-  });
+  // В режиме `off` очередь менеджера не создаётся: вопрос уточняется у
+  // клиента, а не перекладывается менеджеру (ADR-0014).
+  const escalationId = createsManagerQueue()
+    ? await recordEscalation(pool, tenantId, conversationId, {
+        reason: outcome.escalation.reason,
+        summary: outcome.escalation.summary,
+        draft: outcome.escalation.draft,
+        sources: [],
+      })
+    : null;
 
   const agentMessage = await pool.query<{ id: string }>(
     `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
@@ -316,7 +325,7 @@ export async function POST(request: Request): Promise<Response> {
       outcome: "escalate",
       answer: null,
       escalation: {
-        id: escalationId,
+        id: escalationId ?? outcome.escalation.id,
         reason: outcome.escalation.reason,
         summary: outcome.escalation.summary,
         draft: outcome.escalation.draft,

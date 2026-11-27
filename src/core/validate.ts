@@ -79,10 +79,21 @@ export function validateAnswer(
   }
 
   const sourceTexts = sources.map((source) => normalizeText(source.text));
+  const sourceLocations = sources
+    .map((source) => source.location)
+    .filter((location): location is string => typeof location === "string" && location.length > 0)
+    .map((location) => normalizeText(location));
   for (const citation of answer.citations) {
     const normalized = normalizeText(citation);
-    const found = sourceTexts.some((text) => text.includes(normalized));
-    if (!found) {
+    // Цитата подтверждена, если это дословный фрагмент текста источника
+    // либо ссылка на сам одобренный источник: модель часто указывает адрес
+    // статьи вместо цитаты, и такой ответ по требованию «цитата по
+    // одобренному источнику» допустим.
+    const inText = sourceTexts.some((text) => text.includes(normalized));
+    const isSourceLocation = sourceLocations.some(
+      (location) => location.includes(normalized) || normalized.includes(location),
+    );
+    if (!inText && !isSourceLocation) {
       violations.push({
         code: "citation_not_in_source",
         detail: `Цитата «${citation}» отсутствует в подтверждённых источниках.`,
@@ -105,4 +116,45 @@ export function validateAnswer(
   }
 
   return { valid: violations.length === 0, violations };
+}
+
+/**
+ * Проверка исходящего текста на сырые персональные данные.
+ *
+ * Отдельная от `validateAnswer`: приветствие и уточняющий вопрос фактов не
+ * содержат, поэтому источник им не нужен, но персональные данные в тексте
+ * недопустимы в любом ответе — включая ответ без источников.
+ *
+ * Значения, которые уже известны серверу (восстановлены по таблице
+ * соответствий), утечкой не считаются: клиент законно получает свои же
+ * данные обратно. Значения из подтверждённых источников тоже не считаются
+ * утечкой: название вендора или продукта из карточки каталога — это материал
+ * заказчика, а не данные клиента, и без исключения исходящая проверка
+ * блокировала бы любой ответ по каталогу.
+ */
+export function validateOutgoingText(
+  text: string,
+  allowedPersonalValues: readonly string[] = [],
+  sourceTexts: readonly string[] = [],
+): ValidationResult {
+  const knownValues = new Set(allowedPersonalValues.map((value) => value.toLowerCase()));
+  const sourceHaystack = sourceTexts.join("\n").toLowerCase();
+  const leaked = findRawPersonalDataValues(text).filter((value) => {
+    const lower = value.toLowerCase();
+    if (knownValues.has(lower)) return false;
+    if (sourceHaystack.includes(lower)) return false;
+    return true;
+  });
+  if (leaked.length === 0) {
+    return { valid: true, violations: [] };
+  }
+  return {
+    valid: false,
+    violations: [
+      {
+        code: "raw_pii_in_outgoing",
+        detail: `В исходящем тексте остались необработанные персональные данные: ${leaked.join(", ")}.`,
+      },
+    ],
+  };
 }

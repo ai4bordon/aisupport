@@ -124,6 +124,39 @@ async function describeProviderFailure(response: Response): Promise<string> {
 }
 
 /**
+ * Курс доллара в рулях для перевода стоимости вызова модели.
+ *
+ * Провайдер считает стоимость в долларах, а трасса и счётчики бюджета
+ * работают в рублях. Курс задаётся конфигом: `MODEL_USD_TO_RUB`.
+ */
+export const DEFAULT_USD_TO_RUB = 100;
+
+/**
+ * Стоимость вызова в рублях по данным провайдера.
+ *
+ * OpenCode Go в ответе отдаёт `usage.opencode.list_cost` — полную цену
+ * вызова в долларах — и `usage.opencode.allowance` — часть, покрытую
+ * подпиской. В трассу идёт полная стоимость: экономика демо считается по
+ * факту, а не по остатку подписки.
+ */
+function costRubFromUsage(usage: unknown): number {
+  const record = (usage ?? {}) as {
+    opencode?: { list_cost?: number; allowance?: number };
+  };
+  const listCost = record.opencode?.list_cost;
+  if (typeof listCost !== "number" || !Number.isFinite(listCost) || listCost <= 0) {
+    return 0;
+  }
+  const rate = Number.parseFloat(process.env.MODEL_USD_TO_RUB ?? "");
+  const usdToRub = Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_USD_TO_RUB;
+  // Округление до четырёх знаков — та же точность, что у
+  // `usage_counters.spend_rub`. Округление до копеек обнуляло бы стоимость
+  // дешёвых вызовов (классификация стоит доли копейки), и в трассе
+  // экономика выглядела бы как «модель бесплатна».
+  return Math.round(listCost * usdToRub * 10_000) / 10_000;
+}
+
+/**
  * Разбор ответа провайдера: текст, суммы, цитаты и метрики.
  *
  * Суммы и цитаты модель возвращает в структурированном виде — отдельными
@@ -133,7 +166,11 @@ async function describeProviderFailure(response: Response): Promise<string> {
 function parseModelPayload(payload: unknown): ModelResult {
   const record = (payload ?? {}) as {
     choices?: Array<{ message?: { content?: string } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      opencode?: { list_cost?: number; allowance?: number };
+    };
   };
   const content = record.choices?.[0]?.message?.content ?? "";
 
@@ -141,19 +178,26 @@ function parseModelPayload(payload: unknown): ModelResult {
   let amounts: number[] = [];
   let citations: string[] = [];
 
+  // Модель часто оборачивает JSON в блок кода: ```json {...} ```. Хвост после
+  // объекта ломает `JSON.parse`, поэтому берётся сам объект — от первой
+  // открывающей скобки до последней закрывающей.
   const jsonStart = content.indexOf("{");
   if (jsonStart >= 0) {
-    try {
-      const parsed = JSON.parse(content.slice(jsonStart)) as {
-        text?: string;
-        amounts?: number[];
-        citations?: string[];
-      };
-      if (typeof parsed.text === "string") text = parsed.text;
-      if (Array.isArray(parsed.amounts)) amounts = parsed.amounts.map(Number);
-      if (Array.isArray(parsed.citations)) citations = parsed.citations.map(String);
-    } catch {
-      // Ответ не в JSON: берём текст как есть, суммы и цитаты не заявляются.
+    const jsonEnd = content.lastIndexOf("}");
+    const candidate = jsonEnd > jsonStart ? content.slice(jsonStart, jsonEnd + 1) : "";
+    if (candidate.length > 0) {
+      try {
+        const parsed = JSON.parse(candidate) as {
+          text?: string;
+          amounts?: number[];
+          citations?: string[];
+        };
+        if (typeof parsed.text === "string") text = parsed.text;
+        if (Array.isArray(parsed.amounts)) amounts = parsed.amounts.map(Number);
+        if (Array.isArray(parsed.citations)) citations = parsed.citations.map(String);
+      } catch {
+        // Ответ не в JSON: берём текст как есть, суммы и цитаты не заявляются.
+      }
     }
   }
 
@@ -163,7 +207,7 @@ function parseModelPayload(payload: unknown): ModelResult {
     citations,
     tokensIn: record.usage?.prompt_tokens ?? 0,
     tokensOut: record.usage?.completion_tokens ?? 0,
-    costRub: 0,
+    costRub: costRubFromUsage(record.usage),
     model: "",
   };
 }
@@ -210,6 +254,11 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
             messages: request.messages,
             temperature: request.temperature ?? 0.2,
             max_tokens: request.maxTokens ?? 1024,
+            // Рассуждение модели выключено: иначе DeepSeek расходует весь
+            // лимит токенов на скрытое рассуждение, `content` остаётся пустым,
+            // а короткий бюджет шага (32 токена на классификацию) исчерпывается
+            // ни на что.
+            reasoning_effort: "none",
           }),
           signal: controller.signal,
         });
@@ -272,14 +321,22 @@ export const stubModelClient: ModelClient = {
   }),
 };
 
-let activeClient: ModelClient = stubModelClient;
+let activeClient: ModelClient | null = null;
 
 /** Подмена клиента модели — только для тестов и песочницы. */
 export function setModelClient(client: ModelClient): void {
   activeClient = client;
 }
 
+/**
+ * Клиент модели для боевого пути.
+ *
+ * Пока клиент не подменён тестом или песочницей, берётся реальный клиент из
+ * переменных окружения. Раньше здесь стояла заглушка, и живой вызов модели не
+ * происходил вовсе: ответ приходил пустым, а счётчик токенов оставался нулём.
+ */
 export function getModelClient(): ModelClient {
+  activeClient ??= createDefaultModelClient();
   return activeClient;
 }
 

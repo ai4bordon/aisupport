@@ -170,7 +170,7 @@ export async function handleMaxUpdate(
   current: MaxSession,
   update: MaxUpdate,
 ): Promise<string | null> {
-  const message = normalizeMaxUpdate(update, { mask: current.options.mask });
+  const message = await normalizeMaxUpdate(update, { mask: current.options.mask });
   if (!message) {
     // Пустое или неподходящее событие отбрасывается и не роняет опрос.
     return null;
@@ -185,11 +185,11 @@ export async function handleMaxUpdate(
   const outcome = await current.options.runAgent(message);
 
   if (outcome.outcome !== "respond") {
-    current.logger.info(
-      current.log(
-        `MAX: результат escalate для сообщения ${message.messageId} — отправка в MAX не выполняется`,
-      ),
-    );
+    // Клиент получает нейтральное уведомление о передаче вопроса менеджеру.
+    // Формулировка без сроков и обязательств: неподтверждённое обещание
+    // («ответим в течение часа») продукт не даёт, а тишина в чате выглядит
+    // как поломка. Уведомление не содержит черновика и деталей эскалации.
+    await notifyEscalation(current, message, outcome.escalation.reason);
     return message.messageId;
   }
 
@@ -236,6 +236,57 @@ export async function handleMaxUpdates(
     }
   }
   return handled;
+}
+
+/**
+ * Уведомление клиенту об эскалации.
+ *
+ * Формулировка безопасная: без сроков, без обещаний и без деталей
+ * эскалации. Причина эскалации пишется только в лог и в трассу ядра.
+ */
+const ESCALATION_NOTICE =
+  "Передал вопрос менеджеру, ответим в рабочее время.";
+
+/**
+ * Отправляет клиенту уведомление о передаче вопроса менеджеру.
+ *
+ * В режиме тени уведомление не отправляется: режим тени запрещает любые
+ * сообщения клиенту. Ошибка отправки не роняет опрос — вопрос уже передан
+ * менеджеру, клиент увидит статус в веб-кабинете.
+ */
+async function notifyEscalation(
+  current: MaxSession,
+  message: NormalizedMessage,
+  reason: string,
+): Promise<void> {
+  if (await current.options.shadowMode()) {
+    current.logger.info(
+      current.log(
+        `MAX: режим тени — уведомление об эскалации для сообщения ${message.messageId} не отправлено`,
+      ),
+    );
+    return;
+  }
+
+  const chatId = message.externalChatId;
+  if (!chatId) {
+    return;
+  }
+
+  try {
+    await sendWithRateLimit(current, chatId, ESCALATION_NOTICE);
+    current.logger.info(
+      current.log(
+        `MAX: уведомление об эскалации отправлено в чат ${chatId} для сообщения ${message.messageId} (причина ${reason})`,
+      ),
+    );
+  } catch (error) {
+    current.logger.error(
+      current.log(
+        `MAX: уведомление об эскалации не отправлено: ${describeError(error).split("\n")[0]}`,
+      ),
+    );
+  }
 }
 
 /**

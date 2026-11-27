@@ -49,10 +49,10 @@ function isMessageCreated(update: MaxUpdate): update is Extract<MaxUpdate, { upd
  * Возвращает `null`, если событие не несёт сообщения: другой тип события,
  * отсутствие `chat_id`, отсутствие текста или идентификатора сообщения.
  */
-export function normalizeMaxUpdate(
+export async function normalizeMaxUpdate(
   update: MaxUpdate,
   options: NormalizeOptions = {},
-): NormalizedMessage | null {
+): Promise<NormalizedMessage | null> {
   if (!isMessageCreated(update)) {
     return null;
   }
@@ -71,10 +71,11 @@ export function normalizeMaxUpdate(
     return null;
   }
 
-  const masked = options.mask ? options.mask(text) : null;
+  const conversationId = conversationIdFor(String(chatId));
+  const masked = options.mask ? await options.mask(text, conversationId) : null;
 
   return {
-    conversationId: conversationIdFor(String(chatId)),
+    conversationId,
     messageId,
     channel: "max",
     externalChatId: String(chatId),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskPersonalData, restoreMaskedData } from "@/core/mask";
+import { maskPersonalData, restoreMaskedData, findRawPersonalDataValues } from "@/core/mask";
 
 const ORIGINAL = [
   "Иванов Иван Иванович из ООО «Ромашка»,",
@@ -84,5 +84,52 @@ describe("маскирование персональных данных", () =>
 
     expect(maskedText).toBe(text);
     expect(maskedFieldsCount).toBe(0);
+  });
+
+  it("обычные слова в родительном падеже не считаются именем", () => {
+    // Регрессия: правило «имя после предлога» с флагом `i` ловило «ней» в
+    // «перейдите по ней», и живой ответ агента блокировался как утечка ПД.
+    const text =
+      "На форме авторизации предусмотрена ссылка «восстановление пароля» — перейдите по ней, чтобы восстановить доступ.";
+
+    const { maskedText, maskedFieldsCount } = maskPersonalData(text);
+
+    expect(maskedText).toBe(text);
+    expect(maskedFieldsCount).toBe(0);
+  });
+
+  it("имя после предлога по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("вопрос для Иванова.");
+
+    expect(maskedText).toContain("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
+  it("«адрес электронной почты» не считается почтовым адресом", () => {
+    // Регрессия: живая модель писала «укажите адрес электронной почты», и
+    // валидатор считал это утечкой почтового адреса, блокируя ответ.
+    const text = "Укажите адрес электронной почты, на который зарегистрирован аккаунт.";
+
+    const { maskedText, maskedFieldsCount } = maskPersonalData(text);
+
+    expect(maskedText).toBe(text);
+    expect(maskedFieldsCount).toBe(0);
+  });
+
+  it("наименование заказчика не считается утечкой персональных данных", () => {
+    // Регрессия: приветствие с названием компании блокировалось исходящей
+    // проверкой как утечка ПД клиента. Во входящем тексте организация
+    // маскируется, но в исходящей проверке наименование заказчика — это
+    // константа продукта, а не данные клиента.
+    const text = "Здравствуйте! Я агент службы поддержки ПАО «Софтлайн».";
+
+    expect(findRawPersonalDataValues(text)).not.toContain("ПАО «Софтлайн»");
+  });
+
+  it("почтовый адрес по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("адрес: ул. Ленина, д. 5");
+
+    expect(maskedText).toContain("⟦ADDRESS_1⟧");
+    expect(maskedFieldsCount).toBe(1);
   });
 });

@@ -103,7 +103,7 @@ describe("MAX-канал: обработка события", () => {
     });
   });
 
-  it("при результате escalate отправки в MAX нет", async () => {
+  it("при результате escalate клиент получает нейтральное уведомление", async () => {
     const client = stubClient();
     let agentCalls = 0;
     const session = await createMaxSession({
@@ -120,7 +120,12 @@ describe("MAX-канал: обработка события", () => {
 
     expect(handled).toBe("mid-2");
     expect(agentCalls).toBe(1);
-    expect(client.sent).toHaveLength(0);
+    // Уведомление без сроков и обязательств: тишина в чате выглядит как
+    // поломка, а неподтверждённое обещание продукт не даёт.
+    expect(client.sent).toHaveLength(1);
+    expect(client.sent[0]?.text).toBe(
+      "Передал вопрос менеджеру, ответим в рабочее время.",
+    );
   });
 
   it("в режиме тени отправки нет ни при каком результате", async () => {

@@ -63,8 +63,8 @@ async function seedKnowledge(): Promise<void> {
 
   // Шапка чанка несёт ссылку на источник — так ссылка попадает в ответ.
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $4), $5::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $4), $5::vector, 'deterministic-hash-v1')`,
     [
       tenantId,
       article.rows[0]?.id ?? "",
@@ -82,8 +82,8 @@ async function seedKnowledge(): Promise<void> {
     [tenantId],
   );
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [
       tenantId,
       draft.rows[0]?.id ?? "",
@@ -99,8 +99,8 @@ async function seedKnowledge(): Promise<void> {
     [tenantId],
   );
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, document_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, document_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [
       tenantId,
       pending.rows[0]?.id ?? "",
@@ -140,6 +140,9 @@ describe("интеграционная проверка среза 01", () => {
   });
 
   beforeEach(async () => {
+    // Режим эскалации задаётся в каждом тесте явно: тесты меняют его, а
+    // порядок выполнения не должен влиять на результат.
+    process.env.ESCALATION_MODE = "on";
     await seedKnowledge();
   });
 
@@ -171,6 +174,8 @@ describe("интеграционная проверка среза 01", () => {
   });
 
   it("AC2: вопрос без опубликованного источника создаёт эскалацию и не выдаёт неподтверждённый факт", async () => {
+    // Режим `on`: без подтверждённого источника — эскалация (ADR-0014).
+    process.env.ESCALATION_MODE = "on";
     setModelClient(stubModel("Ответ из памяти модели: скидка 40 процентов."));
 
     const response = await POST(

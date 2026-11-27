@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { GET as getMaxStatusRoute } from "@/app/api/max/status/route";
 import {
   createChannelStateStore,
   createCoreClient,
@@ -26,6 +27,18 @@ import {
  */
 
 const TOKEN = "INTEGRATION-MAX-TOKEN-xyz789";
+
+/**
+ * Адрес базы для тестов, которым нужен живой Postgres.
+ *
+ * Тест выполняется, только если задан `DATABASE_URL` — иначе пропускается.
+ */
+const databaseUrl = process.env.DATABASE_URL;
+
+/** Уникальный суффикс slug, чтобы параллельные прогоны не сталкивались. */
+function uniqueSuffix(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 type StubMax = {
   server: Server;
@@ -277,7 +290,7 @@ describe("интеграция MAX-канала с ядром", () => {
     });
   });
 
-  it("не отправляет ответ в MAX при результате escalate", async () => {
+  it("уведомляет клиента о передаче вопроса менеджеру при результате escalate", async () => {
     const max = await startStubMax();
     const core = await startStubCore();
     openStubs.push(max.server, core.server);
@@ -292,10 +305,14 @@ describe("интеграция MAX-канала с ядром", () => {
       shadowMode: async () => false,
     });
 
-    await waitFor(() => core.requests.length === 1);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitFor(() => max.sent.length === 1);
 
-    expect(max.sent).toHaveLength(0);
+    // Уведомление безопасное: без сроков, без обещаний и без деталей
+    // эскалации. Тишина в чате выглядит как поломка.
+    const sent = max.sent[0];
+    expect(sent?.text).toBe("Передал вопрос менеджеру, ответим в рабочее время.");
+    expect(sent?.text).not.toContain("час");
+    expect(sent?.chatId).toBe("779");
   });
 
   it("не отправляет ответ в MAX в режиме тени ни при каком результате", async () => {
@@ -457,22 +474,57 @@ describe("интеграция MAX-канала с ядром", () => {
 /**
  * Проверка маршрута статуса канала: демо показывает состояние подключения,
  * токен бота не раскрывается.
+ *
+ * Тест самодостаточен: он создаёт собственного арендатора с уникальным
+ * slug, кладёт в `channel_state` состояние опроса и удаляет его в
+ * `finally`. Раньше тест ждал пустого состояния и зависел от того, что
+ * в общей базе никто не опрашивает MAX: при живом воркере он падал.
  */
-describe("маршрут статуса канала MAX", () => {
+describe.skipIf(!databaseUrl)("маршрут статуса канала MAX", () => {
   it("отдаёт состояние подключения без токена", async () => {
-    const { GET } = await import("@/app/api/max/status/route");
+    const pool = createStatePool();
+    const slug = `max-status-${uniqueSuffix()}`;
+    const previousSlug = process.env.TENANT_SLUG;
+    let tenantId: string | null = null;
 
-    const response = await GET();
-    const payload = (await response.json()) as Record<string, unknown>;
+    try {
+      const created = await pool.query(
+        `INSERT INTO tenants (slug, name) VALUES ($1, $2)
+         ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+         RETURNING id`,
+        [slug, slug],
+      );
+      tenantId = String((created.rows[0] as { id?: string } | undefined)?.id);
 
-    expect(response.status).toBe(200);
-    expect(payload).toMatchObject({
-      running: expect.any(Boolean),
-      lastEventAt: null,
-      lastMarker: null,
-      shadowMode: expect.any(Boolean),
-    });
-    expect(JSON.stringify(payload)).not.toContain(TOKEN);
+      // Маршрут определяет арендатора из окружения: без переключения он
+      // прочитал бы состояние другого арендатора.
+      process.env.TENANT_SLUG = slug;
+
+      const store = createChannelStateStore(pool, { tenantId });
+      await store.save({
+        marker: 4242,
+        lastEventAt: "2026-11-27T10:00:00.000Z",
+        shadowMode: false,
+      });
+
+      const response = await getMaxStatusRoute();
+      const payload = (await response.json()) as Record<string, unknown>;
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        running: true,
+        lastMarker: 4242,
+        shadowMode: expect.any(Boolean),
+      });
+      expect(JSON.stringify(payload)).not.toContain(TOKEN);
+    } finally {
+      process.env.TENANT_SLUG = previousSlug;
+      if (tenantId) {
+        await pool.query("DELETE FROM channel_state WHERE tenant_id = $1", [tenantId]);
+      }
+      await pool.query("DELETE FROM tenants WHERE slug = $1", [slug]);
+      await pool.end();
+    }
   });
 });
 
@@ -486,13 +538,6 @@ describe("маршрут статуса канала MAX", () => {
  *
  * Тест выполняется, только если задан `DATABASE_URL` — иначе он пропускается.
  */
-const databaseUrl = process.env.DATABASE_URL;
-
-/** Уникальный суффикс slug, чтобы параллельные прогоны не сталкивались. */
-function uniqueSuffix(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 describe.skipIf(!databaseUrl)("интеграция MAX-канала с базой", () => {
   it("сохраняет маркер опроса в channel_state и читает его обратно", async () => {
     const pool = createStatePool();

@@ -70,8 +70,8 @@ async function seedArticle(): Promise<void> {
     [tenantId, ARTICLE_TEXT],
   );
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [
       tenantId,
       article.rows[0]?.id ?? "",
@@ -91,6 +91,9 @@ describe("POST /v1/chat", () => {
   });
 
   beforeEach(async () => {
+    // Режим эскалации задаётся в каждом тесте явно: тесты меняют его, а
+    // порядок выполнения не должен влиять на результат.
+    process.env.ESCALATION_MODE = "on";
     await seedArticle();
     setModelClient(okModel(ARTICLE_TEXT, [ARTICLE_TEXT]));
   });
@@ -128,6 +131,8 @@ describe("POST /v1/chat", () => {
   });
 
   it("вопрос без источника даёт escalate с причиной no_confirmed_source", async () => {
+    // Режим `on`: без подтверждённого источника — эскалация (ADR-0014).
+    process.env.ESCALATION_MODE = "on";
     const response = await POST(
       chatRequest({
         conversation_id: "1a2b3c4d-1111-4111-8111-111111111111",

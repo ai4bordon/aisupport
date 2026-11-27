@@ -1,4 +1,3 @@
-import "@/app/styles/tokens.css";
 import "./widget.css";
 import { Chat } from "./chat";
 

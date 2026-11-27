@@ -16,8 +16,8 @@ function messageCreated(overrides: Partial<MaxUpdate> = {}): MaxUpdate {
 }
 
 describe("normalizeMaxUpdate", () => {
-  it("нормализует событие message_created в сообщение канала max", () => {
-    const normalized = normalizeMaxUpdate(messageCreated());
+  it("нормализует событие message_created в сообщение канала max", async () => {
+    const normalized = await normalizeMaxUpdate(messageCreated());
 
     expect(normalized).not.toBeNull();
     expect(normalized?.channel).toBe("max");
@@ -30,13 +30,13 @@ describe("normalizeMaxUpdate", () => {
     expect(normalized?.maskedFieldsCount).toBe(0);
   });
 
-  it("выводит один и тот же идентификатор диалога для одного и того же чата", () => {
-    const first = normalizeMaxUpdate(messageCreated());
-    const second = normalizeMaxUpdate(messageCreated());
+  it("выводит один и тот же идентификатор диалога для одного и того же чата", async () => {
+    const first = await normalizeMaxUpdate(messageCreated());
+    const second = await normalizeMaxUpdate(messageCreated());
 
     expect(first?.conversationId).toBe(second?.conversationId);
 
-    const other = normalizeMaxUpdate(
+    const other = await normalizeMaxUpdate(
       messageCreated({
         message: {
           body: { mid: "mid-1", text: "другой чат" },
@@ -48,7 +48,7 @@ describe("normalizeMaxUpdate", () => {
     expect(other?.conversationId).not.toBe(first?.conversationId);
   });
 
-  it("отбрасывает событие без chat_id, не бросая исключение", () => {
+  it("отбрасывает событие без chat_id, не бросая исключение", async () => {
     const update = messageCreated({
       message: {
         body: { mid: "mid-2", text: "сообщение без чата" },
@@ -56,10 +56,10 @@ describe("normalizeMaxUpdate", () => {
       },
     } as Partial<MaxUpdate>);
 
-    expect(normalizeMaxUpdate(update)).toBeNull();
+    expect(await normalizeMaxUpdate(update)).toBeNull();
   });
 
-  it("отбрасывает событие без текста", () => {
+  it("отбрасывает событие без текста", async () => {
     const update = messageCreated({
       message: {
         body: { mid: "mid-3", text: null },
@@ -67,17 +67,17 @@ describe("normalizeMaxUpdate", () => {
       },
     } as Partial<MaxUpdate>);
 
-    expect(normalizeMaxUpdate(update)).toBeNull();
+    expect(await normalizeMaxUpdate(update)).toBeNull();
   });
 
-  it("не обрабатывает события других типов", () => {
+  it("не обрабатывает события других типов", async () => {
     const update = messageCreated({ update_type: "bot_started" } as Partial<MaxUpdate>);
 
-    expect(normalizeMaxUpdate(update)).toBeNull();
+    expect(await normalizeMaxUpdate(update)).toBeNull();
   });
 
-  it("применяет порт маскирования ядра, когда он передан", () => {
-    const normalized = normalizeMaxUpdate(messageCreated(), {
+  it("применяет порт маскирования ядра, когда он передан", async () => {
+    const normalized = await normalizeMaxUpdate(messageCreated(), {
       mask: (text: string) => ({
         maskedText: text.replace("50", "⟦COUNT_1⟧"),
         maskedFieldsCount: 1,
@@ -86,5 +86,21 @@ describe("normalizeMaxUpdate", () => {
 
     expect(normalized?.text).toBe("Сколько стоит KES на ⟦COUNT_1⟧ устройств?");
     expect(normalized?.maskedFieldsCount).toBe(1);
+  });
+
+  it("передаёт идентификатор диалога в порт маскирования", async () => {
+    // Таблица соответствий меток накапливается по диалогу, поэтому порт
+    // должен знать, к какому диалогу относится сообщение.
+    let seenConversationId = "";
+
+    const normalized = await normalizeMaxUpdate(messageCreated(), {
+      mask: (text: string, conversationId: string) => {
+        seenConversationId = conversationId;
+        return { maskedText: text, maskedFieldsCount: 0 };
+      },
+    });
+
+    expect(seenConversationId).not.toBe("");
+    expect(seenConversationId).toBe(normalized?.conversationId);
   });
 });

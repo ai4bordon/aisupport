@@ -65,8 +65,8 @@ async function seedConversation(): Promise<void> {
   const embedding = articleEmbedding();
 
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [tenantId, article.rows[0]?.id ?? "", ARTICLE_TEXT, `[${embedding.join(",")}]`],
   );
 
@@ -83,6 +83,9 @@ describe("ядро агента", () => {
   });
 
   beforeEach(async () => {
+    // Режим эскалации задаётся в каждом тесте явно: тесты меняют его, а
+    // порядок выполнения не должен влиять на результат.
+    process.env.ESCALATION_MODE = "on";
     await seedConversation();
   });
 
@@ -112,6 +115,8 @@ describe("ядро агента", () => {
   });
 
   it("нет одобренного источника — escalate с причиной no_confirmed_source", async () => {
+    // Режим `on`: без подтверждённого источника — эскалация (ADR-0014).
+    process.env.ESCALATION_MODE = "on";
     setModelClient(okModel("Ответ из памяти модели."));
 
     const outcome = await runAgent({
@@ -128,6 +133,49 @@ describe("ядро агента", () => {
     if (outcome.outcome !== "escalate") return;
     expect(outcome.escalation.reason).toBe("no_confirmed_source");
     expect(outcome.answer).toBeNull();
+  });
+
+  it("режим off: без источника — честный ответ с уточняющим вопросом, без эскалации", async () => {
+    // ADR-0014: очередь менеджера не создаётся, клиенту честно сообщается об
+    // отсутствии подтверждённого ответа, неподтверждённые факты не выдумываются.
+    process.env.ESCALATION_MODE = "off";
+    setModelClient(okModel("Ответ из памяти модели."));
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "22222222-2222-4222-8222-222222222333",
+      channel: "web",
+      externalChatId: null,
+      text: "Как настроить квантовый телепорт?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("respond");
+    if (outcome.outcome !== "respond") return;
+    expect(outcome.escalation).toBeNull();
+    expect(outcome.answer.text).toContain("нет ответа");
+    // Ответ из памяти модели не попадает в ответ клиенту.
+    expect(outcome.answer.text).not.toContain("Ответ из памяти модели");
+  });
+
+  it("режим notice: без источника — эскалация", async () => {
+    process.env.ESCALATION_MODE = "notice";
+    setModelClient(okModel("Ответ из памяти модели."));
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "22222222-2222-4222-8222-222222222444",
+      channel: "web",
+      externalChatId: null,
+      text: "Как настроить квантовый телепорт?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("escalate");
+    if (outcome.outcome !== "escalate") return;
+    expect(outcome.escalation.reason).toBe("no_confirmed_source");
   });
 
   it("policy запрещает ответ — escalate с причиной policy_denied", async () => {
@@ -283,5 +331,70 @@ describe("ядро агента", () => {
     );
     expect(steps.rows.length).toBeGreaterThan(0);
     expect(steps.rows.map((row) => row.node)).toContain("retrieve");
+  });
+
+  it("приветствие даёт respond без источников и без вызова модели", async () => {
+    // Регрессия: «Привет» уходило в поиск по БЗ, не находило совпадений и
+    // превращалось в эскалацию — клиент в MAX получал тишину.
+    let modelCalled = false;
+    setModelClient({
+      complete: async (): Promise<ModelResult> => {
+        modelCalled = true;
+        return { text: "", amounts: [], citations: [], tokensIn: 0, tokensOut: 0, costRub: 0, model: "stub" };
+      },
+    });
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      channel: "max",
+      externalChatId: "4242",
+      text: "Привет",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("respond");
+    if (outcome.outcome !== "respond") return;
+    expect(outcome.answer.sources).toHaveLength(0);
+    expect(outcome.answer.text).toContain("Здравствуйте");
+    expect(modelCalled).toBe(false);
+  });
+
+  it("вопрос о возможностях даёт respond без источников", async () => {
+    setModelClient(okModel(ARTICLE_TEXT));
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      channel: "max",
+      externalChatId: "4242",
+      text: "Что вы умеете?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("respond");
+    if (outcome.outcome !== "respond") return;
+    expect(outcome.answer.sources).toHaveLength(0);
+    expect(outcome.answer.text.length).toBeGreaterThan(20);
+  });
+
+  it("вопрос о продукте без источника даёт escalate", async () => {
+    setModelClient(okModel(ARTICLE_TEXT));
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      channel: "max",
+      externalChatId: "4242",
+      text: "Сколько стоит несуществующий продукт «Космический Навигатор»?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("escalate");
+    if (outcome.outcome !== "escalate") return;
+    expect(outcome.escalation.reason).toBe("no_confirmed_source");
   });
 });
