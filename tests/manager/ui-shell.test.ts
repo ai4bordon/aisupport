@@ -420,6 +420,7 @@ describe("страница входа менеджера", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     navState.pathname = "/manager/login";
+    navState.pushed = [];
   });
 
   it("отправляет код менеджера JSON-телом на /api/access и не логирует его", async () => {
@@ -462,6 +463,11 @@ describe("страница входа менеджера", () => {
       .join("\n");
     expect(written).not.toContain("manager-secret-code");
     expect(screen.queryByText("manager-secret-code")).not.toBeInTheDocument();
+
+    // После успешной проверки менеджер попадает в кабинет, а код из поля
+    // ввода убирается — в DOM его не остаётся.
+    await waitFor(() => expect(navState.pushed).toContain("/manager"));
+    expect(screen.queryByDisplayValue("manager-secret-code")).not.toBeInTheDocument();
   });
 
   it("при отказе сервера показывает понятную ошибку и не раскрывает код", async () => {
