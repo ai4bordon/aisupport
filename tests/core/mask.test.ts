@@ -86,6 +86,53 @@ describe("маскирование персональных данных", () =>
     expect(maskedFieldsCount).toBe(0);
   });
 
+  it("способ доставки не считается ФИО", () => {
+    // Регрессия: на живом стенде ответ про доставку содержал «Почтой
+    // России», правило «два слова с заглавной буквы» считало это ФИО, и
+    // проверка исходящего текста блокировала ответ с кодом 422.
+    const text = "Доставка Почтой России по всей стране";
+
+    const { maskedText, maskedFieldsCount } = maskPersonalData(text);
+
+    expect(maskedText).toBe(text);
+    expect(maskedFieldsCount).toBe(0);
+    expect(findRawPersonalDataValues(text)).toEqual([]);
+  });
+
+  it("предметная пара не считается ФИО", () => {
+    const text = "Список Товаров и Перечень Услуг";
+
+    expect(findRawPersonalDataValues(text)).toEqual([]);
+  });
+
+  it("ФИО по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("Иван Иванов");
+
+    expect(maskedText).toBe("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
+  it("ФИО с отчеством по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("Иванов Иван Иванович");
+
+    expect(maskedText).toContain("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
+  it("имя и фамилия в родительном падеже маскируются", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("Мария Петрова");
+
+    expect(maskedText).toContain("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
+  it("имя после предлога по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("вопрос для Иванова.");
+
+    expect(maskedText).toContain("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
   it("обычные слова в родительном падеже не считаются именем", () => {
     // Регрессия: правило «имя после предлога» с флагом `i` ловило «ней» в
     // «перейдите по ней», и живой ответ агента блокировался как утечка ПД.
