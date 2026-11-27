@@ -33,6 +33,18 @@ beforeEach(async () => {
      ON CONFLICT (id) DO NOTHING`,
     [conversationId, tenantId],
   );
+  // Статья и чанк вставляются после очистки: тест должен проходить и на
+  // базе, где материал от предыдущего прогона ещё лежит.
+  await testPool().query(
+    `DELETE FROM kb_chunks
+      WHERE tenant_id = $1
+        AND article_id IN (SELECT id FROM kb_articles WHERE tenant_id = $1 AND title = 'Лицензирование')`,
+    [tenantId],
+  );
+  await testPool().query(
+    "DELETE FROM kb_articles WHERE tenant_id = $1 AND title = 'Лицензирование'",
+    [tenantId],
+  );
   const article = await testPool().query<{ id: string }>(
     `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
      VALUES ($1, 'Лицензирование', $2, 'published', now(), now())

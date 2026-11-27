@@ -1,0 +1,414 @@
+/* Оболочка кабинета менеджера — фирменный стиль Softline (R26, ADR-0012).
+   Своих цветов нет: только переменные из src/app/styles/tokens.css.
+   Локальные величины (высота логотипа и прочее) объявлены отдельными
+   переменными и не подменяют фирменные токены. */
+
+.sl-m-shell {
+  --sl-m-logo-height: 24px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+  font-size: var(--sl-font-size-body);
+}
+
+/* Шапка: логотип с охранным полем и навигация по разделам */
+.sl-m-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sl-space-3);
+  padding: var(--sl-space-3) var(--sl-space-4);
+  background: var(--sl-surface);
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-m-brand {
+  display: flex;
+  align-items: center;
+  /* Охранное поле не меньше высоты логотипа — правило брендбука. */
+  padding: max(var(--sl-logo-guard), var(--sl-m-logo-height));
+}
+
+.sl-m-brand__link {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sl-m-brand__logo {
+  display: block;
+  height: var(--sl-m-logo-height);
+  width: auto;
+}
+
+.sl-m-nav {
+  flex: 1 1 auto;
+}
+
+.sl-m-nav__list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-1);
+  margin: 0;
+  padding: 0;
+}
+
+.sl-m-nav__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border-radius: var(--sl-radius);
+  color: var(--sl-text-secondary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.sl-m-nav__link:hover {
+  background: var(--sl-bg);
+  color: var(--sl-text);
+}
+
+.sl-m-nav__link[aria-current="page"] {
+  background: var(--sl-bg);
+  color: var(--sl-accent);
+}
+
+.sl-m-nav__badge {
+  padding: 0 var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+  color: var(--sl-footer);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Область содержимого */
+.sl-m-main {
+  flex: 1 1 auto;
+  padding: var(--sl-space-4);
+}
+
+.sl-m-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+}
+
+.sl-m-page--login {
+  align-items: center;
+  padding-top: var(--sl-space-5);
+}
+
+.sl-m-page__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sl-text);
+}
+
+.sl-m-page__lead {
+  margin: var(--sl-space-2) 0 0;
+  max-width: 80ch;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-m-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sl-space-3);
+}
+
+/* Карточка раздела */
+.sl-m-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-4);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-m-card__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-m-card__description {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-m-card__body {
+  flex: 1 1 auto;
+}
+
+.sl-m-card__note {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--sl-footer);
+}
+
+.sl-m-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-2);
+  flex-wrap: wrap;
+}
+
+.sl-m-badge {
+  padding: 0 var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sl-m-badge--pending {
+  background: var(--sl-bg);
+  color: var(--sl-footer);
+}
+
+/* Кнопки */
+.sl-m-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sl-m-button--primary {
+  background: var(--sl-accent);
+  border-color: var(--sl-accent);
+  color: var(--sl-surface);
+}
+
+.sl-m-button--primary:hover:not(:disabled) {
+  background: var(--sl-accent-hover);
+  border-color: var(--sl-accent-hover);
+}
+
+.sl-m-button:disabled {
+  color: var(--sl-footer);
+  background: var(--sl-bg);
+  border-color: var(--sl-divider);
+  cursor: not-allowed;
+}
+
+/* Вкладки разделов */
+.sl-m-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-1);
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-m-tabs__item {
+  display: inline-flex;
+}
+
+.sl-m-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--sl-text-secondary);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sl-m-tabs__tab[aria-selected="true"] {
+  border-bottom-color: var(--sl-accent);
+  color: var(--sl-accent);
+}
+
+.sl-m-tabs__tab:disabled {
+  color: var(--sl-footer);
+  cursor: not-allowed;
+}
+
+.sl-m-tabs__badge {
+  padding: 0 var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+  color: var(--sl-footer);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Фокус виден на всех интерактивных элементах */
+.sl-m-shell a:focus-visible,
+.sl-m-shell button:focus-visible,
+.sl-m-shell input:focus-visible {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+/* Вход в кабинет */
+.sl-m-login {
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-4);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-m-login__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-2);
+  margin-top: var(--sl-space-3);
+}
+
+.sl-m-login__label {
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.sl-m-login__input {
+  width: 100%;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 16px;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-m-login__note {
+  margin: var(--sl-space-3) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-footer);
+}
+
+.sl-m-login__error {
+  margin: 0;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  color: var(--sl-accent);
+  font-weight: 600;
+}
+
+.sl-m-login__done {
+  margin: 0;
+  color: var(--sl-text-secondary);
+}
+
+/* Барьер доступа */
+.sl-m-gate {
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-3);
+  align-items: flex-start;
+  padding: var(--sl-space-4);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-m-gate__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.sl-m-gate__text {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-m-gate__link {
+  color: var(--sl-accent);
+  font-weight: 600;
+}
+
+/* Явные состояния: загрузка, ошибка, пусто */
+.sl-m-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--sl-space-2);
+  color: var(--sl-text-secondary);
+}
+
+.sl-m-loading__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--sl-divider);
+  border-top-color: var(--sl-accent);
+  border-radius: 50%;
+}
+
+.sl-m-error {
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.sl-m-error__title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--sl-accent);
+}
+
+.sl-m-error__description {
+  margin: var(--sl-space-1) 0 0;
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.sl-m-empty {
+  padding: var(--sl-space-3);
+  border: 1px dashed var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+}
+
+.sl-m-empty__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.sl-m-empty__description {
+  margin: var(--sl-space-1) 0 0;
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
