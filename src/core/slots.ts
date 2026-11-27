@@ -8,6 +8,7 @@
 
 import { getPool } from "@/db/pool";
 import { withDialogLock } from "@/core/dialog-lock";
+import { parseCatalogDomain } from "@/core/catalog-domain";
 import type { RequirementSlots } from "@/core/catalog-lookup";
 
 /** Имена слотов — как в таблице `conversation_slots`. */
@@ -22,11 +23,56 @@ const SLOT_NAMES = [
   "domain",
 ] as const;
 
+/** Имя слота. */
+type SlotName = (typeof SLOT_NAMES)[number];
+
+/**
+ * Разбирает значение слота из базы.
+ *
+ * Значения слотов приходят из базы, а база — недоверенный источник: слот
+ * мог быть заполнен чем угодно (правка вручную, импорт, ошибка в коде).
+ * Поэтому значение проверяется по своему типу, а не приводится к нему
+ * приведением: иначе «много» становилось числом, а неизвестный домен
+ * ронял подбор молча.
+ *
+ * Некорректное значение игнорируется: слот считается незаполненным.
+ */
+function parseSlotValue(name: SlotName, value: string): string | number | null {
+  switch (name) {
+    case "quantity":
+    case "termMonths": {
+      // Только целое число: срок в месяцах и количество лицензий не бывают
+      // дробными.
+      if (!/^\d+$/u.test(value)) return null;
+      const number = Number.parseInt(value, 10);
+      return Number.isFinite(number) ? number : null;
+    }
+    case "domain": {
+      return parseCatalogDomain(value);
+    }
+    case "deployment": {
+      // Развёртывание — одно из двух слов: «сервер» или «облако».
+      const lower = value.toLowerCase();
+      return lower === "сервер" || lower === "облако" ? lower : null;
+    }
+    case "budget": {
+      // Бюджет — сумма в рублях строкой или ответ «нет».
+      if (value === "нет") return "нет";
+      const digits = value.replace(/[^\d]/gu, "");
+      if (digits.length === 0) return null;
+      const number = Number.parseInt(digits, 10);
+      return Number.isFinite(number) ? String(number) : null;
+    }
+    default:
+      return value;
+  }
+}
+
 /**
  * Читает собранные слоты диалога.
  *
  * Незакрытым считается слот, которого нет в таблице или значение которого
- * пустое.
+ * пустое либо некорректное.
  */
 export async function loadSlots(
   conversationId: string,
@@ -48,15 +94,16 @@ export async function loadSlots(
   );
 
   for (const row of result.rows) {
-    const name = row.slot as keyof RequirementSlots;
+    const name = row.slot as SlotName;
     if (!SLOT_NAMES.includes(name)) continue;
     const value = row.value.trim();
     if (value.length === 0) continue;
+    const parsed = parseSlotValue(name, value);
+    if (parsed === null) continue;
     if (name === "quantity" || name === "termMonths") {
-      const number = Number.parseInt(value, 10);
-      slots[name] = Number.isFinite(number) ? number : null;
+      slots[name] = parsed as number;
     } else {
-      slots[name] = value;
+      slots[name] = parsed as string;
     }
   }
 

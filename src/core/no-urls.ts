@@ -14,6 +14,22 @@
 /** URL в тексте ответа. */
 const URL_PATTERN = /https?:\/\/[^\s<>()[\]"'«»]+/giu;
 
+/**
+ * Ссылка без схемы: `softline.ru/product/123`.
+ *
+ * Правило ADR-0014 действует на любой текст, а не только на подмножество со
+ * схемой: модель пишет и «softline.ru/product/123», и такой адрес уходил
+ * клиенту.
+ *
+ * Домен состоит из метки и домена верхнего уровня из закрытого списка:
+ * произвольное слово с точкой («т.е.», «стр. 5») адресом не считается.
+ */
+const SCHEMELESS_URL_PATTERN =
+  /(?<![\p{L}\p{N}@.-])[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.(?:ru|com|org|net|io|info|co|рф)(?:\/[^\s<>()[\]"'«»]*)?/giu;
+
+/** Почтовая ссылка: `mailto:someone@example.com`. */
+const MAILTO_PATTERN = /mailto:[^\s<>()[\]"'«»]+/giu;
+
 /** Ссылка сmarkdown-разметки: `[текст](адрес)` → `текст`. */
 const MARKDOWN_LINK_PATTERN = /\[([^\]]*)\]\((https?:\/\/[^)]+)\)/giu;
 
@@ -27,7 +43,9 @@ const MARKDOWN_LINK_PATTERN = /\[([^\]]*)\]\((https?:\/\/[^)]+)\)/giu;
 export function stripUrls(text: string): string {
   const withoutMarkdown = text.replace(MARKDOWN_LINK_PATTERN, "$1");
   const withoutUrls = withoutMarkdown.replace(URL_PATTERN, "");
-  return withoutUrls
+  const withoutMailto = withoutUrls.replace(MAILTO_PATTERN, "");
+  const withoutSchemeless = withoutMailto.replace(SCHEMELESS_URL_PATTERN, "");
+  return withoutSchemeless
     .split("\n")
     .map((line) => line.replace(/[ \t]{2,}/gu, " ").trimEnd())
     .join("\n")
@@ -38,5 +56,11 @@ export function stripUrls(text: string): string {
 /** Есть ли в тексте ссылка. */
 export function containsUrl(text: string): boolean {
   URL_PATTERN.lastIndex = 0;
-  return URL_PATTERN.test(text);
+  SCHEMELESS_URL_PATTERN.lastIndex = 0;
+  MAILTO_PATTERN.lastIndex = 0;
+  return (
+    URL_PATTERN.test(text) ||
+    SCHEMELESS_URL_PATTERN.test(text) ||
+    MAILTO_PATTERN.test(text)
+  );
 }
