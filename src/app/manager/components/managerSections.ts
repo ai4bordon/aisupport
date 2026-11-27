@@ -73,7 +73,7 @@ export const MANAGER_SECTIONS: ManagerSection[] = [
     label: "Песочница и история",
     href: "/manager/sandbox",
     anchor: "section-sandbox",
-    status: "in-progress",
+    status: "ready",
     summary: "Проверка агента вопросом и журнал прошлых тестов.",
   },
 ];

@@ -22,7 +22,7 @@ import {
 import { loadSlots, saveSlots } from "@/core/slots";
 import { stripSourceMarkers, stripUrls } from "@/core/no-urls";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
-import { validateAnswer, validatePromise } from "@/core/validate";
+import { extractNumbers, validateAnswer, validatePromise } from "@/core/validate";
 import {
   candidateFromAnswer,
   extractPromise,
@@ -763,6 +763,48 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     };
   }
 
+  // Каталог не нашёл позиций. Если идёт подбор (клиент описал задачу или
+  // диалог уже в подборе), ответ по базе знаний здесь опасен: модель на
+  // вопрос «нужно 50 лицензий» без найденной позиции назвала бы цену и
+  // посчитала сумму, которой нет ни в одном источнике, — ответ блокировался
+  // проверкой сумм. В подборе уместен уточняющий вопрос, его задаёт код.
+  if (
+    catalogResult !== null &&
+    catalogResult.matches.length === 0 &&
+    (intent === "product_unknown" ||
+      intent === "product_known" ||
+      slots.discovery !== null ||
+      slots.domain !== null)
+  ) {
+    const slot =
+      catalogResult.missingSlots[0] ?? (slots.productQuery === null ? "productQuery" : null);
+    const question =
+      slot !== null && slot in SLOT_QUESTIONS
+        ? (SLOT_QUESTIONS[slot as keyof RequirementSlots] ?? SLOT_QUESTIONS.quantity)
+        : SLOT_QUESTIONS.quantity;
+    await pushStep({
+      node: "clarify",
+      endpoint: null,
+      tokensIn: 0,
+      tokensOut: 0,
+      costRub: 0,
+      latencyMs: 0,
+      metadata: { slot: slot ?? "productQuery", asked: 1, reason: "no_catalog_match" },
+      sourceIds: [],
+      outcome: "respond",
+      model: null,
+    });
+    return {
+      outcome: "respond",
+      answer: {
+        text: `${question}\n\nПокажу варианты после вашего ответа.`,
+        sources: [],
+      },
+      escalation: null,
+      steps,
+    };
+  }
+
   // Нет подтверждённого источника. В режиме `off` агент отвечает честно и
   // уточняет вопрос: неподтверждённых фактов не выдумывается, очередь
   // менеджера не создаётся. В режимах `notice` и `on` — эскалация.
@@ -895,6 +937,11 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
   const validation = validateAnswer(
     { text: generatedText, amounts: generatedAmounts, citations: generatedCitations },
     sources,
+    [],
+    // Числа из вопроса клиента: ответ на уточняющий вопрос повторяет их
+    // («Нужно 50 лицензий» → «Отлично, 50 лицензий…»), и сверять такое
+    // число с источниками бессмысленно — источник о нём ничего не знает.
+    [...extractNumbers(input.text)],
   );
   await pushStep({
     node: "validate",

@@ -117,7 +117,7 @@ const PERCENT_AFTER = /^\s*(?:%|процент\w*)/iu;
  * Числа источника и числа ответа разбираются одной функцией: иначе
  * сравнение шло бы по разным правилам и «5 000» не совпало бы с «5000».
  */
-function extractNumbers(text: string): Set<number> {
+export function extractNumbers(text: string): Set<number> {
   const numbers = new Set<number>();
   for (const match of text.matchAll(new RegExp(NUMBER, "gu"))) {
     const integerPart = match[0].split(/[.,]/u)[0] ?? "";
@@ -238,6 +238,16 @@ export function validateAnswer(
   answer: CandidateAnswer,
   sources: Source[],
   allowedPersonalValues: readonly string[] = [],
+  /**
+   * Числа, названные клиентом в его же вопросе.
+   *
+   * Ответ на уточняющий вопрос повторяет число клиента: «Нужно 50 лицензий»
+   * → «Отлично, 50 лицензий…». Такое число не сумма, а цитата самого
+   * клиента, и сверять его с источниками бессмысленно — источник о нём
+   * ничего не знает. Без этого исключения ответ на вопрос с числом
+   * блокировался проверкой сумм.
+   */
+  clientQuestionNumbers: readonly number[] = [],
 ): ValidationResult {
   const violations: ValidationViolation[] = [];
 
@@ -252,6 +262,8 @@ export function validateAnswer(
   for (const source of sources) {
     for (const amount of sourceAmounts(source)) allowed.add(amount);
   }
+  // Числа клиента допустимы: они подтверждены самим вопросом.
+  for (const amount of clientQuestionNumbers) allowed.add(amount);
 
   // Проверяются и суммы, названные в тексте ответа, и суммы, заявленные
   // моделью в поле `amounts`: текст — то, что увидит клиент, поле —
