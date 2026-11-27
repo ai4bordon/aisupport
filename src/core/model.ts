@@ -237,6 +237,35 @@ function tariffFor(model: string): number | null {
 }
 
 /**
+ * Токены вызова по ответу провайдера.
+ *
+ * Значения приводятся к конечным числам: провайдер может не отдать счётчик,
+ * и тогда токенов ноль — это факт «счётчика нет», а не `NaN` в трассе.
+ */
+function usageTokens(usage: unknown): { tokensIn: number; tokensOut: number } {
+  const record = (usage ?? {}) as {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+  const tokensIn = Number.isFinite(record.prompt_tokens) ? (record.prompt_tokens ?? 0) : 0;
+  const tokensOut = Number.isFinite(record.completion_tokens)
+    ? (record.completion_tokens ?? 0)
+    : 0;
+  return { tokensIn, tokensOut };
+}
+
+/**
+ * Округление стоимости до четырёх знаков.
+ *
+ * Та же точность, что у `usage_counters.spend_rub`. Округление до копеек
+ * обнуляло бы стоимость дешёвых вызовов (классификация стоит доли копейки),
+ * и в трассе экономика выглядела бы как «модель бесплатна».
+ */
+function roundRub(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+/**
  * Стоимость вызова в рублях и источник, из которого она получена.
  *
  * OpenCode Go в ответе отдаёт `usage.opencode.list_cost` — полную цену
@@ -254,8 +283,6 @@ function costFromUsage(
   model: string,
 ): { costRub: number; source: CostSource; note: string | null } {
   const record = (usage ?? {}) as {
-    prompt_tokens?: number;
-    completion_tokens?: number;
     opencode?: { list_cost?: number; allowance?: number };
   };
   const { rate, problem } = resolveUsdToRub();
@@ -263,37 +290,16 @@ function costFromUsage(
   const hasProviderCost =
     typeof listCost === "number" && Number.isFinite(listCost) && listCost > 0;
 
-  if (hasProviderCost && rate !== null) {
-    // Округление до четырёх знаков — та же точность, что у
-    // `usage_counters.spend_rub`. Округление до копеек обнуляло бы стоимость
-    // дешёвых вызовов (классификация стоит доли копейки), и в трассе
-    // экономика выглядела бы как «модель бесплатна».
-    return {
-      costRub: Math.round(listCost * rate * 10_000) / 10_000,
-      source: "provider",
-      note: null,
-    };
-  }
-
+  // Без курса стоимость в рублях не вычислить ни по какому источнику.
   if (rate === null) {
-    return {
-      costRub: 0,
-      source: "unknown",
-      note: problem,
-    };
+    return { costRub: 0, source: "unknown", note: problem };
   }
 
   if (hasProviderCost) {
-    // Цена провайдера есть, но курса нет: в рублях стоимость неизвестна.
-    return {
-      costRub: 0,
-      source: "unknown",
-      note: problem,
-    };
+    return { costRub: roundRub(listCost * rate), source: "provider", note: null };
   }
 
-  const tokensIn = Number.isFinite(record.prompt_tokens) ? (record.prompt_tokens ?? 0) : 0;
-  const tokensOut = Number.isFinite(record.completion_tokens) ? (record.completion_tokens ?? 0) : 0;
+  const { tokensIn, tokensOut } = usageTokens(usage);
   const tokens = tokensIn + tokensOut;
   const usdPerToken = tariffFor(model);
   if (usdPerToken === null || tokens <= 0) {
@@ -304,9 +310,8 @@ function costFromUsage(
     };
   }
 
-  const usd = tokens * usdPerToken;
   return {
-    costRub: Math.round(usd * rate * 10_000) / 10_000,
+    costRub: roundRub(tokens * usdPerToken * rate),
     source: "tariff",
     note: `Цена вызова провайдером не отдана: стоимость оценена по тарифу модели «${model}» (${tokens} токенов)`,
   };
@@ -381,13 +386,14 @@ function parseModelPayload(payload: unknown, model: string): ModelResult {
   }
 
   const cost = costFromUsage(record.usage, model);
+  const { tokensIn, tokensOut } = usageTokens(record.usage);
 
   return {
     text,
     amounts,
     citations,
-    tokensIn: record.usage?.prompt_tokens ?? 0,
-    tokensOut: record.usage?.completion_tokens ?? 0,
+    tokensIn,
+    tokensOut,
     costRub: cost.costRub,
     costSource: cost.source,
     costNote: cost.note,
