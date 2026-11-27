@@ -6,7 +6,8 @@ import { getTenantId } from "@/db/tenant";
 import { maskPersonalData, restoreMaskedData } from "@/core/mask";
 import { createMaskMappingStore } from "@/core/mask-store";
 import { createsManagerQueue } from "@/core/escalation-mode";
-import { runAgent, type AgentOutcome } from "@/core/run";
+import { withDialogLock } from "@/core/dialog-lock";
+import { runAgentInTurn, type AgentOutcome } from "@/core/run-turn";
 import { buildSetCookie, readConversationId } from "@/core/session";
 import {
   isShadowMode,
@@ -141,7 +142,6 @@ type TurnResult = {
  * (находка B1).
  */
 async function writeTurn(
-  pool: Pool,
   turn: {
     tenantId: string;
     conversationId: string;
@@ -157,57 +157,48 @@ async function writeTurn(
     };
   },
 ): Promise<string> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    try {
-      await client.query(
-        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
-         VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb, NULL)
-         ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
-        [
-          turn.tenantId,
-          turn.conversationId,
-          turn.turnKey,
-          turn.clientTextMasked,
-        ],
-      );
-      const reply = await client.query<{ id: string }>(
-        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
-         VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb, $7)
-         ON CONFLICT (tenant_id, client_message_id) DO NOTHING
-         RETURNING id`,
-        [
-          turn.tenantId,
-          turn.conversationId,
-          turn.reply.messageId,
-          turn.reply.role,
-          turn.reply.textMasked,
-          JSON.stringify(turn.reply.sources),
-          turn.turnKey,
-        ],
-      );
-      const stored = reply.rows[0];
-      if (stored) {
-        await client.query("COMMIT");
-        return stored.id;
-      }
+  // Запись идёт под блокировкой диалога (`src/core/dialog-lock.ts`): блокировка
+  // общая для веб-чата и воркера MAX, а два параллельных хода одного диалога
+  // не должны повредить переписку друг друга. Обе записи хода — в одной
+  // транзакции, поэтому сбой не оставляет диалог в полусостоянии.
+  return withDialogLock(turn.conversationId, async (client) => {
+    await client.query(
+      `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
+       VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb, NULL)
+       ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
+      [
+        turn.tenantId,
+        turn.conversationId,
+        turn.turnKey,
+        turn.clientTextMasked,
+      ],
+    );
+    const reply = await client.query<{ id: string }>(
+      `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
+       VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb, $7)
+       ON CONFLICT (tenant_id, client_message_id) DO NOTHING
+       RETURNING id`,
+      [
+        turn.tenantId,
+        turn.conversationId,
+        turn.reply.messageId,
+        turn.reply.role,
+        turn.reply.textMasked,
+        JSON.stringify(turn.reply.sources),
+        turn.turnKey,
+      ],
+    );
+    const stored = reply.rows[0];
+    if (stored) return stored.id;
 
-      // Ответ хода уже записан: возвращается его идентификатор, чтобы
-      // повтор вернул тот же `message_id`.
-      const existing = await client.query<{ id: string }>(
-        "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2",
-        [turn.tenantId, turn.reply.messageId],
-      );
-      await client.query("COMMIT");
-      return existing.rows[0]?.id ?? turn.reply.messageId;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
-  } finally {
-    client.release();
-  }
+    // Ответ хода уже записан: возвращается его идентификатор, чтобы
+    // повтор вернул тот же `message_id`.
+    const existing = await client.query<{ id: string }>(
+      "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2",
+      [turn.tenantId, turn.reply.messageId],
+    );
+    return existing.rows[0]?.id ?? turn.reply.messageId;
+  });
 }
 
 /**
@@ -543,7 +534,10 @@ export async function POST(request: Request): Promise<Response> {
 
   let outcome: AgentOutcome;
   try {
-    outcome = await runAgent({
+    // Ядро запускается в контексте хода (`src/core/run-turn.ts`): ключ шага
+    // трассы выводится из идентификатора хода, поэтому повтор того же хода
+    // не создаёт второй шаг.
+    outcome = await runAgentInTurn({
       conversationId,
       messageId: turn,
       channel: "web",
@@ -556,7 +550,7 @@ export async function POST(request: Request): Promise<Response> {
     // Сбой ядра не оставляет диалог в полусостоянии: ход фиксируется как
     // отказ, а не как сообщение без ответа.
     const summary = "Ход не обработан: сбой агентного цикла.";
-    await writeTurn(pool, {
+    await writeTurn({
       tenantId,
       conversationId,
       turnKey: turn,
@@ -594,7 +588,7 @@ export async function POST(request: Request): Promise<Response> {
       summary: outcome.escalation.summary,
       draft: outcome.escalation.draft,
     });
-    await writeTurn(pool, {
+    await writeTurn({
       tenantId,
       conversationId,
       turnKey: turn,
@@ -652,7 +646,7 @@ export async function POST(request: Request): Promise<Response> {
         summary,
         draft: null,
       });
-      await writeTurn(pool, {
+      await writeTurn({
         tenantId,
         conversationId,
         turnKey: turn,
@@ -703,7 +697,7 @@ export async function POST(request: Request): Promise<Response> {
         traceRef: conversationId,
       });
 
-      const messageId = await writeTurn(pool, {
+      const messageId = await writeTurn({
         tenantId,
         conversationId,
         turnKey: turn,
@@ -744,7 +738,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const messageId = await writeTurn(pool, {
+    const messageId = await writeTurn({
       tenantId,
       conversationId,
       turnKey: turn,
@@ -810,7 +804,7 @@ export async function POST(request: Request): Promise<Response> {
   const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
   const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
 
-  const messageId = await writeTurn(pool, {
+  const messageId = await writeTurn({
     tenantId,
     conversationId,
     turnKey: turn,
