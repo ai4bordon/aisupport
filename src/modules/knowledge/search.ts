@@ -26,6 +26,14 @@ export type SearchResult = {
  */
 export type EmbeddingProvider = {
   embed: (text: string) => Promise<number[]>;
+  /**
+   * Идентификатор модели, которой построены векторы.
+   *
+   * Поиск сверяет его с моделью индекса: вектор запроса, построенный другой
+   * моделью, не сравним с вектором чанка, и такое сравнение даёт мусор вместо
+   * совпадений.
+   */
+  model: string;
 };
 
 const DEFAULT_LIMIT = 5;
@@ -95,6 +103,7 @@ function hashStem(value: string): number {
  * проверяется exec, когда владелец выдаст ключ.
  */
 export const deterministicEmbeddingProvider: EmbeddingProvider = {
+  model: "deterministic-hash-v1",
   embed: async (text: string) => {
     const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
     for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
@@ -112,6 +121,44 @@ let embeddingProvider: EmbeddingProvider = deterministicEmbeddingProvider;
 /** Подмена провайдера эмбеддингов — только для тестов и песочницы. */
 export function setEmbeddingProvider(provider: EmbeddingProvider): void {
   embeddingProvider = provider;
+}
+
+/**
+ * Провайдер эмбеддингов, которым индексирована база знаний.
+ *
+ * Возвращает `null`, если провайдер ещё не выбран: без ключа владельца
+ * векторный поиск работает на детерминированной заглушке, и чанки, собранные
+ * живой моделью, с ней не сравнимы.
+ */
+export function currentEmbeddingProvider(): EmbeddingProvider {
+  return embeddingProvider;
+}
+
+/**
+ * Выбор провайдера эмбеддингов при старте приложения.
+ *
+ * Раньше провайдер всегда оставался заглушкой на хешах, а чанки в базе лежали
+ * с живыми векторами: векторное сравнение было бессмысленным, и поиск
+ * работал только по текстовому совпадению. Теперь при наличии ключа
+ * выбирается живой провайдер, и модель фиксируется в чанках при импорте.
+ *
+ * Идентификатор модели возвращается для трассы: по нему видно, каким
+ * провайдером построен вектор запроса.
+ */
+export function initEmbeddingProvider(options?: {
+  apiKey?: string;
+  model?: string;
+}): EmbeddingProvider {
+  const apiKey = options?.apiKey ?? process.env["OPENCODE_API_KEY"];
+  if (apiKey && apiKey.length > 0) {
+    embeddingProvider = createOpenCodeEmbeddingProvider({
+      apiKey,
+      model: options?.model ?? process.env["EMBEDDING_MODEL"],
+    });
+  } else {
+    embeddingProvider = deterministicEmbeddingProvider;
+  }
+  return embeddingProvider;
 }
 
 /**
@@ -140,6 +187,7 @@ export function createOpenCodeEmbeddingProvider(
   const fetchImpl = options.fetchImpl ?? fetch;
 
   return {
+    model,
     embed: async (text: string): Promise<number[]> => {
       if (!options.apiKey) {
         throw new Error("Ключ модели не задан: векторный поиск недоступен");
@@ -245,6 +293,7 @@ export async function search(
   const pool = getPool();
 
   const embedding = await embeddingProvider.embed(query);
+  const model = embeddingProvider.model;
 
   const vectorResult = await pool.query<ChunkRow>(
     `
@@ -260,6 +309,7 @@ export async function search(
     LEFT JOIN kb_articles a ON a.id = c.article_id
     LEFT JOIN kb_documents d ON d.id = c.document_id
     WHERE c.tenant_id = $1
+      AND c.embedding_model = $5
       AND (
         (c.article_id IS NOT NULL AND a.status = 'published')
         OR (c.document_id IS NOT NULL AND d.status = 'published')
@@ -268,7 +318,7 @@ export async function search(
     ORDER BY c.embedding <=> $2::vector
     LIMIT $3
     `,
-    [tenantId, toVectorLiteral(embedding), boundedLimit, MIN_VECTOR_SIMILARITY],
+    [tenantId, toVectorLiteral(embedding), boundedLimit, MIN_VECTOR_SIMILARITY, model],
   );
 
   const seen = new Set<string>();

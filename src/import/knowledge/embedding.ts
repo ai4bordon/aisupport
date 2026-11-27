@@ -13,10 +13,18 @@ export type EmbeddingProvider = {
   embed(text: string): Promise<number[]>;
   /** Размерность вектора. */
   readonly dimensions: number;
+  /**
+   * Идентификатор модели, которой построены векторы.
+   *
+   * Модель записывается в чанк при импорте: вектор, построенный другой
+   * моделью, с ним не сравним, и поиск должен отвергнуть такой чанк, а не
+   * сравнивать несравнимое.
+   */
+  readonly model: string;
 };
 
 export const EMBEDDING_DIMENSIONS = 1536;
-export const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+export const DEFAULT_EMBEDDING_MODEL = "qwen3-embedding-8b";
 export const DEFAULT_EMBEDDING_URL = "https://opencode.ai/inference/go/openai/v1/embeddings";
 
 type EmbeddingResponse = {
@@ -42,6 +50,7 @@ export function createEmbeddingProvider(options?: {
 
   return {
     dimensions: EMBEDDING_DIMENSIONS,
+    model,
     async embed(text: string): Promise<number[]> {
       if (apiKey.length === 0) {
         throw new Error("Не задан OPENCODE_API_KEY: векторы построить нельзя");
@@ -52,7 +61,7 @@ export function createEmbeddingProvider(options?: {
           "content-type": "application/json",
           authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ model, input: text }),
+        body: JSON.stringify({ model, input: text, dimensions: EMBEDDING_DIMENSIONS }),
         signal: AbortSignal.timeout(timeoutMs),
       });
 
@@ -82,6 +91,7 @@ export function createEmbeddingProvider(options?: {
 export function createDeterministicEmbeddingProvider(dimensions = EMBEDDING_DIMENSIONS): EmbeddingProvider {
   return {
     dimensions,
+    model: "deterministic-hash-v1",
     async embed(text: string): Promise<number[]> {
       const vector = new Array<number>(dimensions).fill(0);
       // Разносим символы по координатам: близкие тексты дают близкие векторы.

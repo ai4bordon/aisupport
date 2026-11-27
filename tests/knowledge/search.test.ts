@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closePool } from "@/db/pool";
-import { search } from "@/modules/knowledge";
+import { search, setEmbeddingProvider, type EmbeddingProvider } from "@/modules/knowledge";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
 
 /**
@@ -56,20 +56,20 @@ async function seedFixtures(): Promise<{ tenantId: string; publishedArticleId: s
   );
 
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [tenantId, publishedArticleId, "Электронная лицензия предоставляется в течение 120 минут после оплаты.", `[${embeddingFor(["Электронная", "лицензия", "предоставляется"]).join(",")}]`],
   );
 
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, (SELECT id FROM kb_articles WHERE title = 'Постоплата' AND tenant_id = $1), 0, $2, to_tsvector('russian', $2), $3::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, (SELECT id FROM kb_articles WHERE title = 'Постоплата' AND tenant_id = $1), 0, $2, to_tsvector('russian', $2), $3::vector, 'deterministic-hash-v1')`,
     [tenantId, "Отсрочка платежа предоставляется по письменному согласованию.", `[${embeddingFor(["Отсрочка", "платежа", "предоставляется"]).join(",")}]`],
   );
 
   await testPool().query(
-    `INSERT INTO kb_chunks (tenant_id, document_id, chunk_no, text, search_vector, embedding)
-     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector)`,
+    `INSERT INTO kb_chunks (tenant_id, document_id, chunk_no, text, search_vector, embedding, embedding_model)
+     VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
     [tenantId, document.rows[0]?.id ?? "", "Материал загруженного документа ждёт одобрения менеджера.", `[${embeddingFor(["Материал", "загруженного", "документа"]).join(",")}]`],
   );
 
@@ -135,5 +135,63 @@ describe("поиск по базе знаний", () => {
     expect(results[0]?.articleId).toBe(publishedArticleId);
     expect(results[0]?.title).toBe("Лицензирование");
     expect(results[0]?.chunkId).toBeTruthy();
+  });
+
+  it("смысловой поиск находит статью по вопросу без точных слов", async () => {
+    // Регрессия: поиск сравнивал вектор запроса с вектором чанка, построенными
+    // разными моделями, и смысловой поиск не работал. Здесь провайдер запроса
+    // и провайдер индекса — один, и вектор строится по смыслу.
+    const semanticProvider: EmbeddingProvider = {
+      model: "test-semantic-v1",
+      embed: async (text: string) => {
+        // Вектор зависит от смысла, а не от слов: «не могу войти» и
+        // «восстановление пароля» дают один и тот же вектор.
+        const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+        const meaning = /вход|войти|парол|доступ|авторизац/i.test(text)
+          ? "access"
+          : "other";
+        vector[meaning === "access" ? 7 : 900] = 1;
+        return vector;
+      },
+    };
+
+    await testPool().query(
+      `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+       VALUES ($1, $2, 1, $3, to_tsvector('russian', $3), $4::vector, 'test-semantic-v1')`,
+      [
+        tenantId,
+        publishedArticleId,
+        "Восстановление пароля от личного кабинета: инструкция по сбросу.",
+        `[${(() => {
+          const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+          vector[7] = 1;
+          return vector;
+        })().join(",")}]`,
+      ],
+    );
+
+    setEmbeddingProvider(semanticProvider);
+    const results = await search("не могу войти в личный кабинет", tenantId);
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.title).toBe("Лицензирование");
+  });
+
+  it("чанк, проиндексированный другой моделью, не попадает в выдачу", async () => {
+    // Вектор запроса и вектор чанка строятся разными моделями: сравнивать их
+    // бессмысленно, поэтому чанк отвергается по модели индекса.
+    const otherModelProvider: EmbeddingProvider = {
+      model: "other-model-v2",
+      embed: async () => {
+        const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
+        vector[7] = 1;
+        return vector;
+      },
+    };
+
+    setEmbeddingProvider(otherModelProvider);
+    const results = await search("восстановление пароля", tenantId);
+
+    expect(results).toEqual([]);
   });
 });

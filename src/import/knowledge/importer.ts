@@ -227,9 +227,17 @@ async function importPage(
     const vector = await embeddingProvider.embed(chunk.text);
     await client.query(
       `INSERT INTO kb_chunks (
-         tenant_id, article_id, chunk_no, page_no, text, search_vector, embedding
-       ) VALUES ($1, $2, $3, $4, $5, to_tsvector('russian', $5), $6::vector)`,
-      [tenantId, sourceIdValue, chunk.chunkNo, pageNo, chunk.text, vectorLiteral(vector)],
+         tenant_id, article_id, chunk_no, page_no, text, search_vector, embedding, embedding_model
+       ) VALUES ($1, $2, $3, $4, $5, to_tsvector('russian', $5), $6::vector, $7)`,
+      [
+        tenantId,
+        sourceIdValue,
+        chunk.chunkNo,
+        pageNo,
+        chunk.text,
+        vectorLiteral(vector),
+        embeddingProvider.model,
+      ],
     );
   }
 
