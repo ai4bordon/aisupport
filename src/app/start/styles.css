@@ -1,0 +1,426 @@
+/* Экран демо `/start` — фирменный стиль Softline (R26, ADR-0012).
+   Только переменные из `src/app/styles/tokens.css`: своих цветов нет.
+   Свои переменные объявлены только для размеров экрана. */
+
+.sl-start {
+  --sl-start-logo-height: 44px;
+  --sl-start-max-width: 1180px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+/* Шапка с логотипом и охранным полем. */
+.sl-start__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sl-space-3);
+  flex-wrap: wrap;
+  padding: var(--sl-space-3) var(--sl-space-4);
+  background: var(--sl-surface);
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-start__brand {
+  display: flex;
+  align-items: center;
+  /* Охранное поле не меньше высоты логотипа — правило брендбука. */
+  padding: max(var(--sl-logo-guard), var(--sl-start-logo-height));
+  background: var(--sl-surface);
+}
+
+.sl-start__logo {
+  display: block;
+  height: var(--sl-start-logo-height);
+  width: auto;
+  max-width: 100%;
+}
+
+.sl-start__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-start__subtitle {
+  margin: var(--sl-space-1) 0 0;
+  font-size: 13px;
+  color: var(--sl-text-secondary);
+}
+
+.sl-start__header-spacer {
+  flex: 1;
+}
+
+.sl-start__badge {
+  padding: var(--sl-space-1) var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  font-size: 12px;
+  color: var(--sl-text-secondary);
+  background: var(--sl-bg);
+  white-space: nowrap;
+}
+
+/* Оболочка вкладок. */
+.sl-start__main {
+  width: 100%;
+  max-width: var(--sl-start-max-width);
+  margin: 0 auto;
+  padding: var(--sl-space-4);
+  flex: 1;
+}
+
+.sl-start__tabs {
+  display: flex;
+  gap: var(--sl-space-1);
+  border-bottom: 1px solid var(--sl-divider);
+  margin-bottom: var(--sl-space-4);
+  flex-wrap: wrap;
+}
+
+.sl-start__tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+  cursor: pointer;
+}
+
+.sl-start__tab:hover {
+  color: var(--sl-text);
+}
+
+.sl-start__tab[aria-selected="true"] {
+  color: var(--sl-accent);
+  border-bottom-color: var(--sl-accent);
+}
+
+/* Видимый фокус на всех интерактивных элементах. */
+.sl-start__tab:focus-visible,
+.sl-start__link:focus-visible,
+.sl-start__button:focus-visible,
+.sl-start__input:focus-visible {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+.sl-start__panel:focus-visible {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+/* Панель вкладки и карточки. */
+.sl-start__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+}
+
+.sl-start__panel:focus {
+  outline: none;
+}
+
+.sl-start__card {
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  padding: var(--sl-space-4);
+}
+
+.sl-start__card-title {
+  margin: 0 0 var(--sl-space-2);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-start__card-lead {
+  margin: 0 0 var(--sl-space-3);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-start__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sl-space-3);
+  flex-wrap: wrap;
+}
+
+.sl-start__row-between {
+  justify-content: space-between;
+}
+
+.sl-start__link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sl-accent);
+  text-decoration: none;
+}
+
+.sl-start__link:hover {
+  color: var(--sl-accent-hover);
+  text-decoration: underline;
+}
+
+.sl-start__button {
+  appearance: none;
+  font-family: var(--sl-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  color: var(--sl-surface);
+  background: var(--sl-accent);
+  border: 1px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  cursor: pointer;
+}
+
+.sl-start__button:hover {
+  background: var(--sl-accent-hover);
+  border-color: var(--sl-accent-hover);
+}
+
+.sl-start__button--quiet {
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border-color: var(--sl-divider);
+}
+
+.sl-start__button--quiet:hover {
+  background: var(--sl-bg);
+}
+
+/* Состояние: загрузка, ошибка, пусто. */
+.sl-start__state {
+  padding: var(--sl-space-4);
+  border: 1px dashed var(--sl-divider);
+  border-radius: var(--sl-radius);
+  font-size: 14px;
+  color: var(--sl-text-secondary);
+  background: var(--sl-bg);
+}
+
+.sl-start__state--error {
+  border-style: solid;
+  border-color: var(--sl-accent);
+  color: var(--sl-text);
+}
+
+.sl-start__state-title {
+  margin: 0 0 var(--sl-space-1);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+/* Виджет в рамке. */
+.sl-start__widget {
+  width: 100%;
+  height: 520px;
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+/* Сниппет встраивания. */
+.sl-start__snippet {
+  display: block;
+  width: 100%;
+  min-height: 84px;
+  padding: var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text);
+  background: var(--sl-bg);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  white-space: pre-wrap;
+  word-break: break-all;
+  resize: vertical;
+}
+
+.sl-start__note {
+  margin: var(--sl-space-2) 0 0;
+  font-size: 13px;
+  color: var(--sl-text-secondary);
+}
+
+/* Сетка статуса MAX. */
+.sl-start__status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--sl-space-3);
+  margin: 0;
+}
+
+.sl-start__status-item {
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  padding: var(--sl-space-3);
+  background: var(--sl-bg);
+}
+
+.sl-start__status-term {
+  margin: 0 0 var(--sl-space-1);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--sl-text-secondary);
+}
+
+.sl-start__status-value {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sl-text);
+  word-break: break-word;
+}
+
+/* QR и ссылка на бота. */
+.sl-start__bot {
+  display: flex;
+  gap: var(--sl-space-4);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.sl-start__qr {
+  flex: 0 0 auto;
+  padding: var(--sl-space-2);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  line-height: 0;
+}
+
+.sl-start__qr-svg {
+  display: block;
+  width: 168px;
+  height: 168px;
+}
+
+.sl-start__bot-info {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+/* Лента сообщений. */
+.sl-start__feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-2);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.sl-start__message {
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  background: var(--sl-bg);
+}
+
+.sl-start__message--agent {
+  background: var(--sl-surface);
+}
+
+.sl-start__message-head {
+  display: flex;
+  gap: var(--sl-space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: var(--sl-space-1);
+}
+
+.sl-start__message-role {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--sl-text-secondary);
+}
+
+.sl-start__message-time {
+  font-size: 12px;
+  color: var(--sl-text-muted);
+}
+
+.sl-start__message-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--sl-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Форма кода менеджера. */
+.sl-start__form {
+  display: flex;
+  gap: var(--sl-space-2);
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-top: var(--sl-space-3);
+}
+
+.sl-start__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+  flex: 1 1 220px;
+}
+
+.sl-start__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.sl-start__input {
+  width: 100%;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-start__input:focus {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 1px;
+}
+
+.sl-start__iframe {
+  width: 100%;
+  height: 560px;
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+@media (max-width: 720px) {
+  .sl-start__main {
+    padding: var(--sl-space-3);
+  }
+
+  .sl-start__widget,
+  .sl-start__iframe {
+    height: 420px;
+  }
+}
