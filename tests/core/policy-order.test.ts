@@ -34,10 +34,7 @@ beforeEach(async () => {
     [conversationId, tenantId],
   );
   // Статья и чанк вставляются после очистки: тест должен проходить и на
-  // базе, где материал от предыдущего прогона ещё лежит, — иначе падение
-  // на уникальном индексе выглядит как дефект кода, а не как незакрытая
-  // фикстура. Уникального индекса на `(tenant_id, title)` у статьи нет,
-  // поэтому материал удаляется по идентификатору.
+  // базе, где материал от предыдущего прогона ещё лежит.
   await testPool().query(
     `DELETE FROM kb_chunks
       WHERE tenant_id = $1
@@ -48,16 +45,22 @@ beforeEach(async () => {
     "DELETE FROM kb_articles WHERE tenant_id = $1 AND title = 'Лицензирование'",
     [tenantId],
   );
-  await testPool().query(
+  const article = await testPool().query<{ id: string }>(
     `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
-     VALUES ($1, 'Лицензирование', $2, 'published', now(), now())`,
+     VALUES ($1, 'Лицензирование', $2, 'published', now(), now())
+     RETURNING id`,
     [tenantId, ARTICLE_TEXT],
   );
   await testPool().query(
     `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
-     VALUES ($1, (SELECT id FROM kb_articles WHERE tenant_id = $2 LIMIT 1), 0, $3,
-       to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
-    [tenantId, tenantId, ARTICLE_TEXT, `[${new Array(1536).fill(0).join(",")}]`],
+     VALUES ($1, $2, 0, $3,
+       to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')
+     ON CONFLICT (tenant_id, article_id, chunk_no) WHERE article_id IS NOT NULL
+     DO UPDATE SET text = EXCLUDED.text,
+                   search_vector = EXCLUDED.search_vector,
+                   embedding = EXCLUDED.embedding,
+                   embedding_model = EXCLUDED.embedding_model`,
+    [tenantId, article.rows[0]?.id ?? null, ARTICLE_TEXT, `[${new Array(1536).fill(0).join(",")}]`],
   );
 });
 

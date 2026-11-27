@@ -68,10 +68,11 @@
 | `role` | text | not null; `client`, `agent`, `manager`, `system` |
 | `text_masked` | text | not null; текст с метками ПД |
 | `text_original` | text | null; полный текст только для серверной части |
+| `reply_to_client_message_id` | uuid | null; для ролей `agent`/`system` — ключ хода сообщения клиента, на которое это ответ |
 | `sources` | jsonb | not null, default `'[]'::jsonb` |
 | `created_at` | timestamptz | not null, default now() |
 
-Индексы: unique `(tenant_id, client_message_id)` для идемпотентности; `(tenant_id, conversation_id, created_at)`.
+Индексы: unique `(tenant_id, client_message_id)` для идемпотентности; `(tenant_id, conversation_id, created_at)`; `(tenant_id, conversation_id, reply_to_client_message_id)` — связь ответа с исходным сообщением клиента.
 
 ### 3.4 `escalations`
 

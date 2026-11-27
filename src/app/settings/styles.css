@@ -1,0 +1,199 @@
+/* Кабинет менеджера: настройки агента — фирменный стиль Softline (R26, ADR-0012).
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.sl-settings {
+  --sl-settings-logo-height: 53px;
+  min-height: 100vh;
+  padding: var(--sl-space-5) var(--sl-space-4);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+.sl-settings__card,
+.sl-settings__section,
+.sl-settings__group {
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-settings__card {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--sl-space-5);
+}
+
+.sl-settings__brand {
+  max-width: 960px;
+  margin: 0 auto var(--sl-space-4);
+}
+
+.sl-settings__logo {
+  display: block;
+  height: var(--sl-settings-logo-height);
+  width: auto;
+  max-width: 100%;
+  /* Охранное поле не меньше высоты логотипа — правило брендбука. */
+  padding: max(var(--sl-logo-guard), var(--sl-settings-logo-height));
+}
+
+.sl-settings__title {
+  margin: var(--sl-space-4) 0 var(--sl-space-2);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sl-text);
+}
+
+.sl-settings__lead {
+  margin: 0 0 var(--sl-space-4);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-settings__form,
+.sl-settings__section {
+  max-width: 960px;
+  margin: 0 auto var(--sl-space-4);
+}
+
+.sl-settings__section {
+  padding: var(--sl-space-4);
+}
+
+.sl-settings__heading {
+  margin: 0 0 var(--sl-space-3);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-settings__group {
+  margin: 0 0 var(--sl-space-3);
+  padding: var(--sl-space-4);
+  border: 1px solid var(--sl-divider);
+}
+
+.sl-settings__legend {
+  padding: 0 var(--sl-space-2);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+  margin-bottom: var(--sl-space-3);
+}
+
+.sl-settings__label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sl-text-secondary);
+}
+
+.sl-settings__input,
+.sl-settings__textarea {
+  width: 100%;
+  padding: var(--sl-space-2);
+  font-family: var(--sl-font-sans);
+  font-size: 15px;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-settings__textarea {
+  resize: vertical;
+}
+
+.sl-settings__input:focus,
+.sl-settings__textarea:focus {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 1px;
+}
+
+/* Отключённый элемент управления: не только цвет, но и атрибут disabled
+   и текстовая пометка «не реализовано» — цвет не единственный носитель смысла. */
+.sl-settings__input:disabled {
+  background: var(--sl-bg);
+  color: var(--sl-text-muted);
+  cursor: not-allowed;
+}
+
+.sl-settings__row {
+  margin-bottom: var(--sl-space-3);
+}
+
+.sl-settings__reason {
+  margin: var(--sl-space-1) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-muted);
+}
+
+.sl-settings__note {
+  margin: var(--sl-space-2) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-muted);
+}
+
+.sl-settings__checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--sl-accent);
+}
+
+.sl-settings__secondary {
+  padding: var(--sl-space-2) var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sl-accent);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  cursor: pointer;
+}
+
+.sl-settings__secondary:hover {
+  background: var(--sl-accent-hover);
+  color: var(--sl-surface);
+}
+
+.sl-settings__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  color: var(--sl-text);
+}
+
+.sl-settings__table th,
+.sl-settings__table td {
+  padding: var(--sl-space-2);
+  text-align: left;
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-settings__table th {
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.sl-settings__empty {
+  margin: 0;
+  font-size: 14px;
+  color: var(--sl-text-muted);
+}
+
+.sl-settings__message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--sl-text-secondary);
+}

@@ -1,12 +1,13 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import pg from "pg";
+import { scopeEnv } from "../env-scope/helpers";
 
 /**
  * Тестовый помощник среза 11: общая база `support_agent_11`.
  *
- * Миграции применяются тем же SQL-форматом, что и `scripts/migrate.mjs`
- * (`-- Up Migration` / `-- Down Migration`), в той же таблице `pgmigrations`,
+ * Миграции применяются тем же SQL-форматом, что и scripts/migrate.mjs
+ * (`-- Up Migration` / `-- Down Migration`), в той же таблице pgmigrations,
  * поэтому предварительный `npm run db:migrate:up` и применение из теста
  * не конфликтуют.
  */
@@ -71,8 +72,10 @@ async function readMigrationFiles(): Promise<Array<{ name: string; up: string }>
  * не выжигают квоту друг друга: счётчики разнесены по `tenant_id`.
  */
 export async function ensureDatabase(tenantSlug: string): Promise<void> {
-  process.env.DATABASE_URL = TEST_DATABASE_URL;
-  process.env.TENANT_SLUG = tenantSlug;
+  // Арендатор действует до конца тестового файла: помощник изоляции
+  // окружения возвращает прежнее значение после файла, поэтому соседний файл
+  // не наследует чужого арендатора (аудит B14).
+  scopeEnv("TENANT_SLUG", tenantSlug);
 
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();

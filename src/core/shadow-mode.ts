@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 /**
  * Режим тени: единая настройка и очередь менеджера (ADR-0008, R10).
  *
@@ -138,6 +136,28 @@ export async function recordManagerQueue(
   pool: ShadowPool,
   input: ManagerQueueInput,
 ): Promise<string> {
+  return insertQueueRecord(pool, {
+    ...input,
+    isShadow: input.isShadow === true,
+  });
+}
+
+/**
+ * Единая точка записи в очередь менеджера.
+ *
+ * Запись идемпотентна: уникальный индекс
+ * `(conversation_id, trace_ref, is_shadow, dedupe_key)` не даёт создать
+ * вторую строку для того же результата ядра. При повторной доставке хода
+ * возвращается идентификатор уже существующей записи, а не новый.
+ *
+ * Если строка не вставлена и не найдена — это сбой записи, а не успех:
+ * функция бросает исключение. Выдуманный идентификатор клиенту не
+ * возвращается: ссылка на запись очереди всегда ведёт в базу.
+ */
+async function insertQueueRecord(
+  pool: ShadowPool,
+  input: ManagerQueueInput & { isShadow: boolean },
+): Promise<string> {
   const sources = input.sources.map((source) => ({
     kind: source.kind,
     id: source.id,
@@ -145,27 +165,65 @@ export async function recordManagerQueue(
     location: source.location ?? null,
   }));
 
+  const values = [
+    input.tenantId,
+    input.conversationId,
+    input.reason,
+    input.summary,
+    input.draft,
+    input.result,
+    JSON.stringify(sources),
+    input.channel,
+    input.traceRef,
+    input.isShadow,
+  ];
+
   const result = await pool.query(
     `INSERT INTO escalations (
        tenant_id, conversation_id, reason, summary, draft, result,
        sources, channel, trace_ref, status, is_shadow
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'open', $10)
+     ON CONFLICT (conversation_id, trace_ref, is_shadow, dedupe_key) DO NOTHING
      RETURNING id`,
+    values,
+  );
+
+  const inserted = result.rows[0] as { id?: string } | undefined;
+  if (inserted?.id) {
+    return inserted.id;
+  }
+
+  // Строка уже была: возвращается её идентификатор, чтобы повторная
+  // доставка хода дала клиенту ту же рабочую ссылку на запись очереди.
+  // Отпечаток содержимого считает та же функция, на которой построен
+  // уникальный индекс: выражения не могут разойтись.
+  const existing = await pool.query(
+    `SELECT id FROM escalations
+      WHERE conversation_id = $1
+        AND trace_ref = $2
+        AND is_shadow = $3
+        AND dedupe_key = escalation_dedupe_key($4, $5, $6, $7, $8, $9::jsonb)
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1`,
     [
-      input.tenantId,
       input.conversationId,
+      input.traceRef,
+      input.isShadow,
       input.reason,
       input.summary,
-      input.draft,
       input.result,
-      JSON.stringify(sources),
+      input.draft,
       input.channel,
-      input.traceRef,
-      input.isShadow === true,
+      JSON.stringify(sources),
     ],
   );
 
-  const row = result.rows[0] as { id?: string } | undefined;
-  return row?.id ?? randomUUID();
+  const row = existing.rows[0] as { id?: string } | undefined;
+  if (!row?.id) {
+    throw new Error(
+      "Запись в очередь менеджера не создана и не найдена: результат ядра потерян",
+    );
+  }
+  return row.id;
 }

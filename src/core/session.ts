@@ -13,6 +13,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const CONVERSATION_COOKIE_NAME = "support_conversation";
 
+/**
+ * Срок жизни cookie диалога — семь суток.
+ *
+ * Без срока жизни cookie жила до закрытия браузера, и диалог вместе с
+ * таблицей соответствий меток терялся: клиент возвращался, а агент начинал
+ * заново и не мог восстановить прежние значения.
+ */
+export const CONVERSATION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+
 function sessionSecret(): string | null {
   return process.env.SESSION_SECRET ?? null;
 }
@@ -44,6 +53,8 @@ function verifySignature(id: string, signature: string): boolean {
  * Чтение идентификатора диалога из заголовка `Cookie`.
  *
  * Возвращает `null`, если cookie нет, подпись неверна или секрет не задан.
+ * Битое percent-encoding тоже даёт `null`: заголовок `Cookie` приходит из
+ * браузера, и недоверенный ввод не должен ронять запрос.
  */
 export function readConversationId(
   cookieHeader: string | undefined,
@@ -56,7 +67,15 @@ export function readConversationId(
     const name = part.slice(0, separator).trim();
     if (name !== CONVERSATION_COOKIE_NAME) continue;
 
-    const value = decodeURIComponent(part.slice(separator + 1).trim());
+    // Значение cookie недоверенное: `%E0%A4%A` не декодируется и бросает
+    // `URIError`. Повреждённая cookie равна отсутствующей — диалог
+    // начинается заново.
+    let value: string;
+    try {
+      value = decodeURIComponent(part.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
     const dot = value.lastIndexOf(".");
     if (dot <= 0) return null;
 
@@ -72,5 +91,12 @@ export function readConversationId(
 
 /** Заголовок `Set-Cookie` для нового диалога. */
 export function buildSetCookie(id: string): string {
-  return `${CONVERSATION_COOKIE_NAME}=${encodeURIComponent(buildCookieValue(id))}; HttpOnly; Secure; SameSite=Lax; Path=/`;
+  return [
+    `${CONVERSATION_COOKIE_NAME}=${encodeURIComponent(buildCookieValue(id))}`,
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${CONVERSATION_COOKIE_MAX_AGE_SECONDS}`,
+  ].join("; ");
 }

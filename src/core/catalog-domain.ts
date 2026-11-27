@@ -14,6 +14,35 @@
 /** Домены подбора, которые различаются в каталоге. */
 export type CatalogDomain = "email" | "security" | "office" | null;
 
+/** Имена доменов — без пустого значения. */
+export type CatalogDomainName = Exclude<CatalogDomain, null>;
+
+/** Имена доменов в том порядке, в котором они перечислены в каталоге. */
+const DOMAIN_NAMES: readonly CatalogDomainName[] = ["email", "security", "office"];
+
+/**
+ * Является ли значение именем домена.
+ *
+ * Значения домена приходят из базы, а база — недоверенный источник: слот
+ * мог быть заполнен чем угодно. Без проверки неизвестное значение доходило
+ * до `domainCategoryMarkers` и роняло подбор молча.
+ */
+export function isCatalogDomainName(value: string): value is CatalogDomainName {
+  return (DOMAIN_NAMES as readonly string[]).includes(value);
+}
+
+/**
+ * Домен из значения слота.
+ *
+ * Неизвестное значение доменом не является: оно игнорируется, и подбор
+ * определяет домен по тексту запроса.
+ */
+export function parseCatalogDomain(value: string | null | undefined): CatalogDomain {
+  if (value === null || value === undefined) return null;
+  const lower = value.trim().toLowerCase();
+  return isCatalogDomainName(lower) ? lower : null;
+}
+
 /**
  * Маркеры категорий фида по доменам.
  *
@@ -75,9 +104,12 @@ export function isEmailSecurityProduct(name: string, params: Record<string, unkn
  * Маркеры категорий фида для домена.
  *
  * Возвращает `null` для домена без маркеров: ограничения по категории нет.
+ * Неизвестный домен тоже даёт `null` — значение приходит из базы, и
+ * обращение к отсутствующему ключу роняло бы подбор молча.
  */
 export function domainCategoryMarkers(domain: CatalogDomain): string[] | null {
   if (domain === null) return null;
+  if (!isCatalogDomainName(domain)) return null;
   return DOMAIN_CATEGORY_MARKERS[domain];
 }
 
@@ -148,6 +180,8 @@ export function categoryMatchesDomain(
 ): boolean {
   if (domain === null) return true;
   if (categoryPath === null) return true;
+  const markers = domainCategoryMarkers(domain);
+  if (markers === null) return true;
   const lower = categoryPath.toLowerCase();
-  return DOMAIN_CATEGORY_MARKERS[domain].some((marker) => lower.includes(marker));
+  return markers.some((marker) => lower.includes(marker));
 }
