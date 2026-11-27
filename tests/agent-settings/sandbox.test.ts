@@ -117,8 +117,14 @@ describe("песочница настроек агента", () => {
 
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
+      // Канал MAX не вызывается, и маршрут веб-чата стенда
+      // (`/v1/chat` самого приложения) не вызывается. Адрес модели провайдера
+      // содержит `/v1/chat/completions` — это не маршрут стенда.
       expect(call.url).not.toContain("platform-api.max.ru");
-      expect(call.url).not.toContain("/v1/chat");
+      expect(call.url).not.toContain("localhost/v1/chat");
+      expect(call.url).not.toContain("127.0.0.1/v1/chat");
+      const { pathname } = new URL(call.url);
+      expect(pathname).not.toBe("/v1/chat");
     }
   });
 

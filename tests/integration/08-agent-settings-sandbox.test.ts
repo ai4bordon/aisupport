@@ -171,8 +171,12 @@ describe("08 — настройки агента, песочница, истор
     expect(result.outcome).toBe("respond");
     expect(after).toEqual(before);
     for (const call of calls) {
+      // Канал MAX не вызывается, и маршрут веб-чата стенда (`/v1/chat`
+      // самого приложения) не вызывается. Адрес модели провайдера содержит
+      // `/v1/chat/completions` — это не маршрут стенда.
       expect(call.url).not.toContain("platform-api.max.ru");
-      expect(call.url).not.toContain("/v1/chat");
+      const { pathname } = new URL(call.url);
+      expect(pathname).not.toBe("/v1/chat");
     }
   });
 
