@@ -1,0 +1,157 @@
+/* Раздел кабинета менеджера «База знаний» — фирменный стиль Softline.
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.kn-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+}
+
+.kn-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+}
+
+.kn-eyebrow {
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.kn-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sl-text);
+}
+
+.kn-lead {
+  margin: 0;
+  max-width: 80ch;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.kn-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+  min-height: 320px;
+}
+
+/* Форма загрузки документа */
+.kn-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sl-space-3);
+}
+
+.kn-label {
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.kn-file {
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  color: var(--sl-text);
+}
+
+/* Списки материалов */
+.kn-list {
+  display: grid;
+  gap: var(--sl-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kn-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.kn-item-main {
+  display: grid;
+  gap: var(--sl-space-1);
+  min-width: 0;
+}
+
+.kn-item-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--sl-text);
+  overflow-wrap: anywhere;
+}
+
+.kn-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+}
+
+.kn-item-status {
+  font-weight: 700;
+  color: var(--sl-text);
+}
+
+.kn-item-excerpt {
+  margin: 0;
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.kn-item-error {
+  margin: 0;
+  color: var(--sl-accent);
+  font-size: 13px;
+}
+
+/* Действия менеджера по материалу */
+.kn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  flex: none;
+}
+
+/* Сообщения операций: успех и ошибка */
+.kn-note {
+  margin: var(--sl-space-2) 0 0;
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.kn-note--error {
+  color: var(--sl-accent);
+  font-weight: 600;
+}
+
+.kn-page .sl-m-button:focus-visible,
+.kn-file:focus-visible {
+  outline: 3px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .kn-item {
+    flex-direction: column;
+  }
+}
