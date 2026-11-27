@@ -32,8 +32,10 @@ import {
   type ArticleDraftStatus,
   type PublishArticleDraftInput,
   type RejectArticleDraftInput,
+  type UpdateArticleDraftInput,
 } from "./types";
 import {
+  deleteArticle,
   deleteArticleChunks,
   insertArticleChunk,
   insertArticleDraft,
@@ -41,6 +43,7 @@ import {
   selectConversation,
   selectConversationMessages,
   transitionArticle,
+  updateArticle,
   type ArticleRow,
 } from "./repository";
 
@@ -72,6 +75,7 @@ function toRecord(row: ArticleRow): ArticleDraftRecord {
     sourceExcerpt: row.source_excerpt,
     title: row.title,
     bodyMd: row.body_md,
+    version: row.version,
     owner: row.owner,
     approvedBy: row.approved_by,
     createdAt: row.created_at,
@@ -316,6 +320,102 @@ export async function getArticleDraft(
   try {
     const row = await selectArticle(client, tenantId, id);
     return row ? toRecord(row) : null;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Статусы, в которых текст материала ещё можно править.
+ *
+ * Правка материала, по которому решение уже принято, не проходит: решение
+ * менеджера относится к тому тексту, который он видел, и правка после
+ * решения сделала бы решение бессмысленным.
+ */
+const EDITABLE_STATUSES: ArticleDraftStatus[] = ["pending_review", "approved"];
+
+/**
+ * Правка текста черновика.
+ *
+ * Правка меняет текст и увеличивает версию материала. Чанки при этом не
+ * трогаются: до публикации материал не индексируется, а опубликованную
+ * статью правят через новый цикл публикации.
+ */
+export async function updateArticleDraft(
+  input: UpdateArticleDraftInput,
+): Promise<ArticleDraftRecord> {
+  const bodyMd = input.bodyMd.trim();
+  if (bodyMd.length === 0) {
+    throw new ArticleDraftError("validation_error", "Текст статьи не может быть пустым");
+  }
+  const title = input.title?.trim();
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const current = await selectArticle(client, input.tenantId, input.id);
+    if (!current) {
+      throw new ArticleDraftError("not_found", "Черновик не найден");
+    }
+
+    const row = await updateArticle(client, {
+      tenantId: input.tenantId,
+      id: input.id,
+      bodyMd,
+      title: title !== undefined && title.length > 0 ? title : undefined,
+      allowedStatuses: EDITABLE_STATUSES,
+    });
+    if (!row) {
+      throw new ArticleDraftError(
+        "conflict",
+        `Править можно только материал, по которому решение не принято, текущий статус — ${current.status}`,
+      );
+    }
+
+    await client.query("COMMIT");
+    return toRecord(row);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Удаление черновика.
+ *
+ * Удаляются и чанки материала: они ссылаются на статью, и статьи без
+ * текста в базе не остаётся. Опубликованный материал удалить нельзя —
+ * он уже в поиске, и решение об этом принимается не здесь.
+ */
+export async function deleteArticleDraft(
+  tenantId: string,
+  id: string,
+): Promise<void> {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const current = await selectArticle(client, tenantId, id);
+    if (!current) {
+      throw new ArticleDraftError("not_found", "Черновик не найден");
+    }
+    if (current.status === "published") {
+      throw new ArticleDraftError(
+        "conflict",
+        "Опубликованную статью удалить нельзя: она доступна поиску",
+      );
+    }
+
+    await deleteArticle(client, tenantId, id);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
   } finally {
     client.release();
   }

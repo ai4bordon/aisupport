@@ -58,6 +58,28 @@ type KnowledgeDraft = {
   published_at: string | null;
 };
 
+/**
+ * Полный черновик статьи — то, что приходит с маршрута черновика.
+ *
+ * Отдельный тип от `KnowledgeDraft`: в списке раздела полного текста нет,
+ * он лежит в `body_md` и приходит только при открытии материала.
+ */
+type DraftDetail = {
+  id: string;
+  title: string;
+  body_md: string;
+  status: string;
+  version: number;
+  conversation_id: string | null;
+  source_message_ids: string[];
+  source_excerpt: string | null;
+  owner: string | null;
+  created_at: string;
+  approved_by: string | null;
+  reviewed_at: string | null;
+  published_at: string | null;
+};
+
 /** Тело маршрута данных раздела. */
 type KnowledgePayload = {
   documents: KnowledgeDocument[];
@@ -113,6 +135,169 @@ async function readJson(response: Response): Promise<ApiBody> {
   }
 }
 
+/**
+ * Модалка черновика статьи.
+ *
+ * В списке раздела видны только заголовок и выдержка из источника: полный
+ * текст материала менеджер читает здесь. Отдельный компонент, а не часть
+ * клиента раздела: у модалки свой жизненный цикл (открытие, правка,
+ * копирование, удаление) и свои состояния.
+ */
+function DraftModal({
+  draft,
+  saving,
+  error,
+  onClose,
+  onSave,
+  onCopy,
+  onDelete,
+}: {
+  draft: DraftDetail;
+  saving: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSave: (bodyMd: string) => void;
+  onCopy: () => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(draft.body_md);
+  const [confirming, setConfirming] = useState(false);
+
+  // Escape закрывает окно, но не в момент правки: закрытие посреди
+  // несохранённой правки потеряло бы текст молча.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape" || editing) return;
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [editing, onClose]);
+
+  return (
+    <div
+      className="kn-modal-backdrop"
+      onClick={(event) => {
+        // Клик по фону закрывает окно, клик по самому окну — нет.
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="kn-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Черновик статьи «${draft.title}»`}
+      >
+        <header className="kn-modal-head">
+          <div className="kn-modal-headings">
+            <h2 className="kn-modal-title">{draft.title}</h2>
+            <p className="kn-modal-meta">
+              <span className="kn-item-status">
+                {DRAFT_STATUS_LABELS[draft.status] ?? draft.status}
+              </span>
+              <span>Версия {draft.version}</span>
+              <span>{DATE_FORMATTER.format(new Date(draft.created_at))}</span>
+              {draft.owner ? <span>{draft.owner}</span> : null}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="sl-m-button"
+            aria-label="Закрыть"
+            onClick={onClose}
+          >
+            Закрыть
+          </button>
+        </header>
+
+        {editing ? (
+          <div className="kn-modal-edit">
+            <label className="kn-label" htmlFor="kn-draft-body">
+              Текст статьи
+            </label>
+            <textarea
+              id="kn-draft-body"
+              className="kn-editor"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
+          </div>
+        ) : (
+          <div className="kn-modal-body">{draft.body_md}</div>
+        )}
+
+        {error ? (
+          <p className="kn-note kn-note--error" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <footer className="kn-modal-foot">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className="sl-m-button sl-m-button--primary"
+                disabled={saving}
+                onClick={() => onSave(text)}
+              >
+                {saving ? "Сохраняем…" : "Сохранить"}
+              </button>
+              <button
+                type="button"
+                className="sl-m-button"
+                disabled={saving}
+                onClick={() => {
+                  setText(draft.body_md);
+                  setEditing(false);
+                }}
+              >
+                Отмена
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="sl-m-button sl-m-button--primary"
+                onClick={() => setEditing(true)}
+              >
+                Изменить
+              </button>
+              <button
+                type="button"
+                className="sl-m-button"
+                onClick={onCopy}
+              >
+                Копировать
+              </button>
+              {confirming ? (
+                <button
+                  type="button"
+                  className="sl-m-button kn-button--danger"
+                  disabled={saving}
+                  onClick={onDelete}
+                >
+                  Подтвердить удаление
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="sl-m-button"
+                  onClick={() => setConfirming(true)}
+                >
+                  Удалить
+                </button>
+              )}
+            </>
+          )}
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 export function KnowledgeClient() {
   const [payload, setPayload] = useState<KnowledgePayload | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -121,6 +306,10 @@ export function KnowledgeClient() {
   const [operations, setOperations] = useState<Record<string, OperationState>>({});
   const [upload, setUpload] = useState<OperationState>({ kind: "idle" });
   const [file, setFile] = useState<File | null>(null);
+  // Открытый черновик: его полный текст приходит с маршрута черновика.
+  const [openDraft, setOpenDraft] = useState<DraftDetail | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftSaving, setDraftSaving] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -149,6 +338,126 @@ export function KnowledgeClient() {
   function retry(): void {
     setLoadError(null);
     setAttempt((value) => value + 1);
+  }
+
+  /**
+   * Открытие черновика: полный текст материала приходит с маршрута.
+   *
+   * В списке видны только заголовок и выдержка, поэтому текст запрашивается
+   * отдельно и только в момент открытия.
+   */
+  async function openDraftModal(id: string): Promise<void> {
+    setDraftError(null);
+    try {
+      const response = await fetch(`/api/manager/knowledge/draft/${id}`, {
+        credentials: "same-origin",
+      });
+      const body = await readJson(response);
+      if (!response.ok) {
+        setDraftError(
+          body.error?.message ?? "Не удалось открыть черновик статьи.",
+        );
+        return;
+      }
+      const data = (body as unknown as { draft?: DraftDetail }).draft;
+      if (!data) {
+        setDraftError("Не удалось открыть черновик статьи.");
+        return;
+      }
+      setOpenDraft(data);
+    } catch {
+      setDraftError("Нет связи с сервером. Попробуйте позже.");
+    }
+  }
+
+  /** Закрытие окна: открытый материал забывается. */
+  function closeDraftModal(): void {
+    setOpenDraft(null);
+    setDraftError(null);
+  }
+
+  /**
+   * Сохранение правки текста.
+   *
+   * Версия материала растёт на сервере: в ответе приходит уже новая, и
+   * менеджер видит, какой версией статьи он пользуется.
+   */
+  async function saveDraft(bodyMd: string): Promise<void> {
+    if (!openDraft) return;
+    setDraftSaving(true);
+    setDraftError(null);
+    try {
+      const response = await fetch(
+        `/api/manager/knowledge/draft/${openDraft.id}`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ body_md: bodyMd }),
+        },
+      );
+      const body = await readJson(response);
+      if (!response.ok) {
+        setDraftError(
+          body.error?.message ?? "Не удалось сохранить правку статьи.",
+        );
+        return;
+      }
+      const updated = (body as unknown as { draft?: DraftDetail }).draft;
+      setOpenDraft(updated ?? { ...openDraft, body_md: bodyMd });
+      setAttempt((value) => value + 1);
+    } catch {
+      setDraftError("Нет связи с сервером. Попробуйте позже.");
+    } finally {
+      setDraftSaving(false);
+    }
+  }
+
+  /** Копирование текста статьи в буфер обмена. */
+  async function copyDraft(): Promise<void> {
+    if (!openDraft) return;
+    try {
+      await navigator.clipboard.writeText(openDraft.body_md);
+      setDraftError(null);
+    } catch {
+      setDraftError("Не удалось скопировать текст: браузер не дал доступ к буферу.");
+    }
+  }
+
+  /**
+   * Удаление черновика.
+   *
+   * Материал уходит из списка вместе с записью: ушедший черновик в списке
+   * оставаться не должен.
+   */
+  async function deleteDraft(): Promise<void> {
+    if (!openDraft) return;
+    setDraftSaving(true);
+    setDraftError(null);
+    try {
+      const response = await fetch(
+        `/api/manager/knowledge/draft/${openDraft.id}`,
+        { method: "DELETE" },
+      );
+      const body = await readJson(response);
+      if (!response.ok) {
+        setDraftError(
+          body.error?.message ?? "Не удалось удалить черновик статьи.",
+        );
+        return;
+      }
+      setPayload((previous) => {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          drafts: previous.drafts.filter((draft) => draft.id !== openDraft.id),
+        };
+      });
+      setOpenDraft(null);
+    } catch {
+      setDraftError("Нет связи с сервером. Попробуйте позже.");
+    } finally {
+      setDraftSaving(false);
+    }
   }
 
   /**
@@ -522,9 +831,18 @@ export function KnowledgeClient() {
                   const key = `draft:${draft.id}`;
                   const operation = operations[key] ?? { kind: "idle" as const };
                   return (
-                    <li key={draft.id} className="kn-item">
+                      <li key={draft.id} className="kn-item">
                       <div className="kn-item-main">
-                        <p className="kn-item-title">{draft.title}</p>
+                        <button
+                          type="button"
+                          className="kn-item-title kn-item-title--button"
+                          aria-label={`Открыть статью «${draft.title}»`}
+                          onClick={() => {
+                            void openDraftModal(draft.id);
+                          }}
+                        >
+                          {draft.title}
+                        </button>
                         <p className="kn-item-meta">
                           <span className="kn-item-status">
                             {DRAFT_STATUS_LABELS[draft.status] ?? draft.status}
@@ -581,6 +899,30 @@ export function KnowledgeClient() {
           </ManagerCard>
         )}
       </div>
+
+      {openDraft ? (
+        <DraftModal
+          draft={openDraft}
+          saving={draftSaving}
+          error={draftError}
+          onClose={closeDraftModal}
+          onSave={(bodyMd) => {
+            void saveDraft(bodyMd);
+          }}
+          onCopy={() => {
+            void copyDraft();
+          }}
+          onDelete={() => {
+            void deleteDraft();
+          }}
+        />
+      ) : draftError ? (
+        // Ошибка открытия материала видна в разделе: окно не открылось, и
+        // сообщение о неудаче не должно остаться без места.
+        <p className="kn-note kn-note--error" role="alert">
+          {draftError}
+        </p>
+      ) : null}
     </section>
   );
 }

@@ -60,6 +60,21 @@ export type RejectArticleDraftInput = {
   actor: string;
 };
 
+/**
+ * Правка текста черновика менеджером.
+ *
+ * Правка материала, по которому решение уже принято, не проходит: решение
+ * менеджера относится к тому тексту, который он видел.
+ */
+export type UpdateArticleDraftInput = {
+  tenantId: string;
+  id: string;
+  /** Новый текст статьи. */
+  bodyMd: string;
+  /** Новый заголовок: если не задан, заголовок прежний. */
+  title?: string;
+};
+
 /** Запись черновика в её текущем состоянии. */
 export type ArticleDraftRecord = {
   id: string;
@@ -71,6 +86,13 @@ export type ArticleDraftRecord = {
   sourceExcerpt: string | null;
   title: string;
   bodyMd: string;
+  /**
+   * Номер версии материала.
+   *
+   * Растёт при каждой правке текста: по нему видно, что материал
+   * менялся, и правка не осталась незамеченной.
+   */
+  version: number;
   owner: string | null;
   /** Менеджер, принявший решение по материалу. */
   approvedBy: string | null;

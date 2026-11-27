@@ -126,6 +126,66 @@ export async function transitionArticle(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Правка текста статьи.
+ *
+ * Версия растёт на единицу: правка видна по номеру, и по нему же видно,
+ * что текст менялся. Условие по статусу стоит в самом `UPDATE`: правка
+ * материала, по которому решение уже принято, не проходит.
+ */
+export async function updateArticle(
+  client: PoolClient,
+  values: {
+    tenantId: string;
+    id: string;
+    bodyMd: string;
+    title?: string;
+    allowedStatuses: string[];
+  },
+): Promise<ArticleRow | null> {
+  const result = await client.query<ArticleRow>(
+    `UPDATE kb_articles
+        SET body_md = $4,
+            title = COALESCE($5, title),
+            version = version + 1
+      WHERE tenant_id = $1
+        AND id = $2
+        AND status = ANY($3::text[])
+      RETURNING *`,
+    [
+      values.tenantId,
+      values.id,
+      values.allowedStatuses,
+      values.bodyMd,
+      values.title ?? null,
+    ],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Удаление статьи с её чанками.
+ *
+ * Чанки удаляются первыми: на них ссылается внешний ключ, и удаление статьи
+ * с чанками одним каскадом невозможно — удаление статьи сначала оставило бы
+ * чанки без владельца.
+ */
+export async function deleteArticle(
+  client: PoolClient,
+  tenantId: string,
+  id: string,
+): Promise<boolean> {
+  await client.query(
+    "DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id = $2",
+    [tenantId, id],
+  );
+  const result = await client.query(
+    "DELETE FROM kb_articles WHERE tenant_id = $1 AND id = $2",
+    [tenantId, id],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** Проверка диалога: он должен существовать и принадлежать арендатору. */
 export async function selectConversation(
   client: PoolClient,

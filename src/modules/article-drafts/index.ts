@@ -13,9 +13,11 @@ export {
   approveAndPublishArticleDraft,
   approveArticleDraft,
   createArticleDraft,
+  deleteArticleDraft,
   getArticleDraft,
   publishArticleDraft,
   rejectArticleDraft,
+  updateArticleDraft,
 } from "./service";
 
 export { ArticleDraftError } from "./types";
@@ -28,4 +30,5 @@ export type {
   ArticleDraftStatus,
   PublishArticleDraftInput,
   RejectArticleDraftInput,
+  UpdateArticleDraftInput,
 } from "./types";

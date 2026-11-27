@@ -145,13 +145,139 @@
 }
 
 .kn-page .sl-m-button:focus-visible,
-.kn-file:focus-visible {
+.kn-file:focus-visible,
+.kn-modal .sl-m-button:focus-visible,
+.kn-editor:focus-visible,
+.kn-item-title--button:focus-visible {
   outline: 3px solid var(--sl-accent);
   outline-offset: 2px;
+}
+
+/* Заголовок черновика открывает материал: он сделан кнопкой, но выглядит
+   как заголовок карточки. */
+.kn-item-title--button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kn-item-title--button:hover {
+  text-decoration: underline;
+}
+
+/* Модалка черновика: полный текст материала */
+.kn-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sl-space-4);
+  background: var(--sl-divider);
+}
+
+.kn-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-3);
+  width: min(720px, 100%);
+  max-height: 90vh;
+  padding: var(--sl-space-4);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  box-shadow: 0 12px 32px var(--sl-divider);
+}
+
+.kn-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+}
+
+.kn-modal-headings {
+  display: grid;
+  gap: var(--sl-space-1);
+  min-width: 0;
+}
+
+.kn-modal-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--sl-text);
+  overflow-wrap: anywhere;
+}
+
+.kn-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+}
+
+/* Полный текст статьи: длинный текст прокручивается, окно не растёт */
+.kn-modal-body {
+  overflow-y: auto;
+  min-height: 120px;
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  color: var(--sl-text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.kn-modal-edit {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+
+.kn-editor {
+  overflow-y: auto;
+  min-height: 240px;
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--sl-text);
+  resize: vertical;
+}
+
+.kn-modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+}
+
+/* Опасное действие: удаление материала. Отдельный класс раздела, общие
+   стили кнопок кабинета не меняются. */
+.kn-button--danger {
+  border-color: var(--sl-accent);
+  color: var(--sl-accent);
+}
+
+.kn-button--danger:hover:not(:disabled) {
+  background: var(--sl-accent);
+  color: var(--sl-surface);
 }
 
 @media (max-width: 860px) {
   .kn-item {
     flex-direction: column;
+  }
+
+  .kn-modal {
+    max-height: 100%;
   }
 }
