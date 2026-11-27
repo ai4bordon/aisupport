@@ -29,7 +29,7 @@ import { runAgent } from "@/core/run";
 import { getTenantId } from "@/db/tenant";
 
 const SESSION_SECRET = process.env["SESSION_SECRET"] ?? "";
-const MANAGER_CODE = process.env["MANAGER_CODE"] ?? "";
+const MANAGER_CODE = process.env["MANAGER_ACCESS_CODE"] ?? "";
 const PORT = Number(process.env["LIVE_PORT"] ?? 3110);
 
 /**

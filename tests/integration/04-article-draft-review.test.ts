@@ -163,7 +163,7 @@ describe("04 — черновики статей из материалов ди�
   beforeAll(async () => {
     // Коды и секрет подписи — тестовые: реальных ключей у среза нет.
     process.env.SESSION_SECRET ??= "test-session-secret-article-drafts-04";
-    process.env.MANAGER_CODE = MANAGER_CODE;
+    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
     process.env.ACCESS_CODE = ACCESS_CODE;
     await ensureSchema();
   });

@@ -50,8 +50,15 @@ export function currentAccessCode(): string | null {
   return code && code.length > 0 ? code : null;
 }
 
+/**
+ * Код доступа в кабинет менеджера.
+ *
+ * Отдельный код от клиентского: кабинет жюри открывается по своему коду,
+ * а клиентский доступ к стенду по нему не проходит. Значение владелец
+ * переносит в описание продукта само — в репозиторий код не попадает.
+ */
 export function currentManagerCode(): string | null {
-  const code = process.env.MANAGER_CODE;
+  const code = process.env.MANAGER_ACCESS_CODE;
   return code && code.length > 0 ? code : null;
 }
 

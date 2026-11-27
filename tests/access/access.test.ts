@@ -192,7 +192,7 @@ describe("код доступа и подписанная cookie", () => {
   });
 
   it("не пускает в кабинет менеджера без кода менеджера", async () => {
-    process.env.MANAGER_CODE = "manager-code-11";
+    process.env.MANAGER_ACCESS_CODE = "manager-code-11";
 
     expect(await verifyManagerCode("not-the-manager-code")).toBeNull();
 
@@ -214,7 +214,7 @@ describe("код доступа и подписанная cookie", () => {
   });
 
   it("отзывает код менеджера при его смене", async () => {
-    process.env.MANAGER_CODE = "manager-code-11";
+    process.env.MANAGER_ACCESS_CODE = "manager-code-11";
     const session = await verifyManagerCode("manager-code-11");
     const managerCookie = `${MANAGER_COOKIE_NAME}=${signAccessSession(
       session as AccessSession,
@@ -222,7 +222,7 @@ describe("код доступа и подписанная cookie", () => {
 
     expect(readManagerSession(managerCookie)).not.toBeNull();
 
-    process.env.MANAGER_CODE = "another-manager-code-11";
+    process.env.MANAGER_ACCESS_CODE = "another-manager-code-11";
 
     expect(readManagerSession(managerCookie)).toBeNull();
   });

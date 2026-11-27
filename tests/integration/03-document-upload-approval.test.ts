@@ -131,7 +131,7 @@ describe("03 — загрузка, индексация и утверждени�
     await ensureSchema();
     documentsDir = await mkdtemp(join(tmpdir(), "kb-upload-integration-"));
     process.env.KB_DOCUMENTS_DIR = documentsDir;
-    process.env.MANAGER_CODE = MANAGER_CODE;
+    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
     setEmbeddingProvider(deterministicProvider);
   });
