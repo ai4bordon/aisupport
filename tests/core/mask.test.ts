@@ -127,6 +127,24 @@ describe("маскирование персональных данных", () =>
     expect(maskedFieldsCount).toBe(0);
   });
 
+  it("география после предлога не считается именем", () => {
+    // Регрессия: «Стоимость доставки по России» ловилось правилом «имя после
+    // предлога», и ответ блокировался как утечка ФИО.
+    const text = "Стоимость доставки по России";
+
+    const { maskedText, maskedFieldsCount } = maskPersonalData(text);
+
+    expect(maskedText).toBe(text);
+    expect(maskedFieldsCount).toBe(0);
+  });
+
+  it("имя после предлога по-прежнему маскируется", () => {
+    const { maskedText, maskedFieldsCount } = maskPersonalData("вопрос для Иванова.");
+
+    expect(maskedText).toContain("⟦PERSON_1⟧");
+    expect(maskedFieldsCount).toBe(1);
+  });
+
   it("наименование заказчика не считается утечкой персональных данных", () => {
     // Регрессия: приветствие с названием компании блокировалось исходящей
     // проверкой как утечка ПД клиента. Во входящем тексте организация
