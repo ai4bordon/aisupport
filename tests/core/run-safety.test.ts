@@ -34,6 +34,19 @@ beforeEach(async () => {
      ON CONFLICT (id) DO NOTHING`,
     [conversationId, tenantId],
   );
+  // Материал удаляется перед вставкой: тест должен проходить и на базе,
+  // где он остался от предыдущего прогона, — иначе падение на уникальном
+  // индексе выглядит как дефект кода.
+  await testPool().query(
+    `DELETE FROM kb_chunks
+      WHERE tenant_id = $1
+        AND article_id IN (SELECT id FROM kb_articles WHERE tenant_id = $1 AND title = 'Поставка')`,
+    [tenantId],
+  );
+  await testPool().query(
+    "DELETE FROM kb_articles WHERE tenant_id = $1 AND title = 'Поставка'",
+    [tenantId],
+  );
   await testPool().query(
     `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
      VALUES ($1, 'Поставка', $2, 'published', now(), now())`,
