@@ -49,7 +49,7 @@ export const MANAGER_SECTIONS: ManagerSection[] = [
     label: "База знаний",
     href: "/manager/knowledge",
     anchor: "section-knowledge",
-    status: "in-progress",
+    status: "ready",
     summary: "Загруженные документы, черновики статей и их одобрение.",
   },
   {
