@@ -1,0 +1,224 @@
+/* Раздел кабинета менеджера «Агент» — фирменный стиль Softline (R26, ADR-0012).
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.sl-agent-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+  padding: var(--sl-space-4);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+.sl-agent-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+}
+
+.sl-agent-eyebrow {
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sl-agent-title {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.3;
+  color: var(--sl-text);
+}
+
+.sl-agent-lead {
+  margin: 0;
+  max-width: 80ch;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+  margin-bottom: var(--sl-space-3);
+}
+
+.sl-agent-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-input,
+.sl-agent-textarea {
+  width: 100%;
+  padding: var(--sl-space-2);
+  font-family: var(--sl-font-sans);
+  font-size: 15px;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+}
+
+.sl-agent-textarea {
+  resize: vertical;
+}
+
+.sl-agent-input:disabled,
+.sl-agent-textarea:disabled {
+  background: var(--sl-bg);
+  color: var(--sl-text-muted);
+  cursor: not-allowed;
+}
+
+/* Фокус виден на всех интерактивных элементах */
+.sl-agent-page a:focus-visible,
+.sl-agent-page button:focus-visible,
+.sl-agent-page input:focus-visible,
+.sl-agent-page textarea:focus-visible {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+.sl-agent-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--sl-accent);
+}
+
+.sl-agent-button {
+  align-self: flex-start;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sl-text);
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  cursor: pointer;
+}
+
+.sl-agent-button--primary {
+  color: var(--sl-surface);
+  background: var(--sl-accent);
+  border-color: var(--sl-accent);
+}
+
+.sl-agent-button--primary:hover:not(:disabled) {
+  background: var(--sl-accent-hover);
+  border-color: var(--sl-accent-hover);
+}
+
+.sl-agent-button:disabled {
+  color: var(--sl-text-muted);
+  background: var(--sl-bg);
+  cursor: not-allowed;
+}
+
+.sl-agent-note {
+  margin: var(--sl-space-2) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-muted);
+}
+
+.sl-agent-state {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+.sl-agent-unsupported {
+  margin-bottom: var(--sl-space-3);
+}
+
+/* Нереализованный элемент управления: не только цвет, но и атрибут
+   `disabled` и текстовая пометка «не реализовано» — цвет не единственный
+   носитель смысла (R26). */
+.sl-agent-reason {
+  margin: var(--sl-space-1) 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-muted);
+}
+
+.sl-agent-badge {
+  display: inline-block;
+  padding: 0 var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sl-agent-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  color: var(--sl-text);
+}
+
+.sl-agent-table__caption {
+  margin-bottom: var(--sl-space-2);
+  text-align: left;
+  font-size: 13px;
+  color: var(--sl-text-muted);
+}
+
+.sl-agent-table th,
+.sl-agent-table td {
+  padding: var(--sl-space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-agent-table th {
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-sandbox-result {
+  margin-top: var(--sl-space-3);
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.sl-agent-sandbox-answer {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--sl-text);
+}
+
+.sl-agent-message {
+  margin: 0;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  font-size: 14px;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-error {
+  margin: 0;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sl-accent);
+}

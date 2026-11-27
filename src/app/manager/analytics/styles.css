@@ -1,0 +1,137 @@
+/* Раздел кабинера «Аналитика» — фирменный стиль Softline (R26, ADR-0012).
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.analytics-page {
+  min-height: 100%;
+  padding: var(--sl-space-4);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+}
+
+.analytics-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+  margin-bottom: var(--sl-space-4);
+}
+
+.analytics-eyebrow {
+  margin: 0 0 var(--sl-space-1);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analytics-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.analytics-origin {
+  margin: 0;
+  max-width: 52ch;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-left: 3px solid var(--sl-accent);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Метрики карточки */
+.analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sl-space-3);
+  margin: 0;
+}
+
+.analytics-metric {
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+}
+
+.analytics-metric dt {
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
+.analytics-metric dd {
+  margin: var(--sl-space-1) 0 0;
+  color: var(--sl-text);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+/* Главное число карточки: доля автозакрытия и средний первый ответ */
+.analytics-headline {
+  margin: 0 0 var(--sl-space-2);
+  color: var(--sl-text);
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.analytics-list,
+.analytics-gaps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analytics-list li {
+  padding: var(--sl-space-1) 0;
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.analytics-note {
+  margin: var(--sl-space-3) 0 0;
+  color: var(--sl-footer);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Пробелы в базе знаний */
+.analytics-gaps {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+
+.analytics-gap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sl-space-3);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+}
+
+.analytics-gap__intent {
+  color: var(--sl-text);
+  font-weight: 600;
+}
+
+.analytics-gap__count {
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Фокус виден на интерактивных элементах */
+.analytics-page a:focus-visible,
+.analytics-page button:focus-visible {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: 2px;
+}
