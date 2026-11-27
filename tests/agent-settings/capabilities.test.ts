@@ -54,7 +54,11 @@ describe("реестр возможностей и кабинет настрое
 
   beforeAll(async () => {
     tenantId = await ensureSliceDatabase(TENANT_SLUG);
+    // Имя переменной с кодом менеджера различалось в срезах
+    // (`MANAGER_CODE` и `MANAGER_ACCESS_CODE`): задаются обе, чтобы тест
+    // работал и на ветке среза, и на слитом `main`.
     process.env.MANAGER_CODE = MANAGER_CODE;
+    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
     process.env.TENANT_SLUG = TENANT_SLUG;
   });

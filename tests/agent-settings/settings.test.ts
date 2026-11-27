@@ -28,9 +28,26 @@ const MIGRATION_FILE = resolve(
 
 type FetchCall = {
   url: string;
-  body: { model?: string; temperature?: number; max_tokens?: number };
+  /**
+   * Тело запроса к модели.
+   *
+   * Имя поля лимита токенов у провайдера менялось (`max_tokens` → `maxTokens`),
+   * поэтому тест смотрит значение, а не имя поля: проверяется, что до
+   * провайдера дошло сохранённое число токенов.
+   */
+  body: {
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+    maxTokens?: number;
+  };
   headers: Record<string, string>;
 };
+
+/** Лимит токенов в теле запроса: имя поля у провайдера менялось. */
+function maxTokensOf(body: FetchCall["body"]): number | undefined {
+  return body.max_tokens ?? body.maxTokens;
+}
 
 function stubFetch(calls: FetchCall[]): typeof fetch {
   return (async (
@@ -333,7 +350,7 @@ describe("настройки агента", () => {
     expect(call?.url).toBe("https://saved-endpoint.example/v1/chat/completions");
     expect(call?.body.model).toBe("saved-model-08");
     expect(call?.body.temperature).toBe(0.7);
-    expect(call?.body.max_tokens).toBe(555);
+    expect(maxTokensOf(call?.body ?? {})).toBe(555);
   });
 
   it("ключ провайдера берётся из окружения и не попадает в базу и аудит", async () => {
@@ -410,7 +427,7 @@ describe("настройки агента", () => {
       expect(call?.url).toBe("https://saved-endpoint.example/v1/chat/completions");
       expect(call?.body.model).toBe("saved-model-08");
       expect(call?.body.temperature).toBe(0.7);
-      expect(call?.body.max_tokens).toBe(555);
+      expect(maxTokensOf(call?.body ?? {})).toBe(555);
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -297,10 +297,11 @@ describe("08 — настройки агента, песочница, истор
         model?: string;
         temperature?: number;
         max_tokens?: number;
+        maxTokens?: number;
       };
       expect(body.model).toBe("saved-model-08");
       expect(body.temperature).toBe(0.7);
-      expect(body.max_tokens).toBe(555);
+      expect(body.max_tokens ?? body.maxTokens).toBe(555);
     } finally {
       setModelClient(knownMetricModel());
     }
@@ -349,6 +350,7 @@ async function managerCookie(): Promise<string> {
     "@/modules/access/session"
   );
   process.env.MANAGER_CODE = "integration-manager-08";
+  process.env.MANAGER_ACCESS_CODE = "integration-manager-08";
   process.env.SESSION_SECRET = "integration-secret-08";
   const session = await verifyManagerCode("integration-manager-08");
   if (!session) throw new Error("Сессия менеджера не выдана");
