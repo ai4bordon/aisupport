@@ -14,6 +14,9 @@ import { getPool } from "@/db/pool";
 /** Статус обещания: `open` — в работе, `done` — выполнено, `overdue` — просрочено. */
 export type PromiseStatus = "open" | "done" | "overdue";
 
+/** Канал доставки: MAX — адресат диалог, email — адресат адрес клиента. */
+export type PromiseChannel = "max" | "email";
+
 /** Запись журнала обещаний. */
 export type PromiseRecord = {
   id: string;
@@ -26,6 +29,10 @@ export type PromiseRecord = {
   sourceKind: string | null;
   sourceId: string | null;
   isSynthetic: boolean;
+  channel: PromiseChannel;
+  contactEmail: string | null;
+  contactLabel: string | null;
+  externalChatId: string | null;
   remindedAt: string | null;
   createdAt: string;
 };
@@ -40,6 +47,10 @@ export type RecordPromiseInput = {
   sourceKind?: string | null;
   sourceId?: string | null;
   isSynthetic?: boolean;
+  channel?: PromiseChannel;
+  contactEmail?: string | null;
+  contactLabel?: string | null;
+  externalChatId?: string | null;
 };
 
 /** Фильтр журнала обещаний. */
@@ -60,6 +71,10 @@ type PromiseRow = {
   source_kind: string | null;
   source_id: string | null;
   is_synthetic: boolean;
+  channel: PromiseChannel;
+  contact_email: string | null;
+  contact_label: string | null;
+  external_chat_id: string | null;
   reminded_at: Date | null;
   created_at: Date;
 };
@@ -76,6 +91,10 @@ function toRecord(row: PromiseRow): PromiseRecord {
     sourceKind: row.source_kind,
     sourceId: row.source_id,
     isSynthetic: row.is_synthetic,
+    channel: row.channel,
+    contactEmail: row.contact_email,
+    contactLabel: row.contact_label,
+    externalChatId: row.external_chat_id,
     remindedAt: row.reminded_at === null ? null : row.reminded_at.toISOString(),
     createdAt: row.created_at.toISOString(),
   };
@@ -91,8 +110,9 @@ export async function recordPromise(input: RecordPromiseInput): Promise<PromiseR
   const result = await getPool().query<PromiseRow>(
     `INSERT INTO promises
        (tenant_id, conversation_id, text, due_at, owner, status,
-        source_kind, source_id, is_synthetic)
-     VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8)
+        source_kind, source_id, is_synthetic,
+        channel, contact_email, contact_label, external_chat_id)
+     VALUES ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       input.tenantId,
@@ -103,6 +123,10 @@ export async function recordPromise(input: RecordPromiseInput): Promise<PromiseR
       input.sourceKind ?? null,
       input.sourceId ?? null,
       input.isSynthetic ?? false,
+      input.channel ?? "max",
+      input.contactEmail ?? null,
+      input.contactLabel ?? null,
+      input.externalChatId ?? null,
     ],
   );
   const row = result.rows[0];

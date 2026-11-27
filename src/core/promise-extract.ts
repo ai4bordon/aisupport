@@ -18,6 +18,17 @@ import type { Source } from "@/contracts/chat";
  * Срок не берётся «на веру» из текста модели: формулировка срока ищется в
  * подтверждённом источнике, и только найденная в источнике величина
  * превращается в `due_at`.
+ *
+ * Формат обязательства в ответе модели — отдельная строка-маркер:
+ *
+ * ```
+ * ОБЕЩАНИЕ: Отправить КП | срок: 12.03.2026 | источник: [1]
+ * ```
+ *
+ * Маркер живёт в тексте ответа модели, а не в отдельном поле JSON: общий
+ * разбор ответа провайдера (`src/core/model.ts`) отдаёт только текст, суммы и
+ * цитаты, и трогать его срез не имеет права. Строка маркера вырезается из
+ * ответа клиенту — обязательство формулирует код, а не модель.
  */
 
 /** Источник, подтверждённый поиском по базе знаний. */
@@ -89,9 +100,6 @@ export type CandidateContext = {
   contactEmail?: string | null;
 };
 
-/** Маркер обещания в ответе модели. */
-const PROMISE_MARKER = /обещание\s*:/iu;
-
 /** Ответственный, названный в источнике. */
 const OWNER_PATTERN = /ответственн(?:ый|ая|ые)\s*[:—–-]\s*([^\n.;]+)/iu;
 
@@ -107,35 +115,49 @@ const EMAIL_LABEL_PATTERN = /⟦EMAIL_\d+⟧/u;
  */
 const RAW_EMAIL_PATTERN = /[^\s@,;]+@[^\s@,;]+/u;
 
-type Deadline = {
-  /** Формулировка срока как её написала модель. */
-  phrase: string;
-  /** Вычисленный срок. */
-  dueAt: string;
-};
+/** Строка-маркер обязательства в ответе модели. */
+const PROMISE_MARKER = /(?:^|\n)\s*ОБЕЩАНИЕ\s*:\s*(.+)/u;
 
-/** Единицы длительности срока. */
+/** Ссылка на источник по номеру в подсказке промпта: `[1]`. */
+const SOURCE_REF_PATTERN = /^\[(\d+)\]$/u;
+
+/**
+ * Единицы длительности срока.
+ *
+ * Порядок важен: «минуты» проверяется раньше «минут», иначе короткая форма
+ * съела бы длинную.
+ */
 const DURATION_UNITS: Array<{ pattern: string; milliseconds: number }> = [
-  { pattern: "минут", milliseconds: 60_000 },
-  { pattern: "час", milliseconds: 3_600_000 },
-  { pattern: "дн", milliseconds: 86_400_000 },
-  { pattern: "день", milliseconds: 86_400_000 },
-  { pattern: "недел", milliseconds: 604_800_000 },
-  { pattern: "месяц", milliseconds: 2_592_000_000 },
+  { pattern: "минут\\w*", milliseconds: 60_000 },
+  { pattern: "час\\w*", milliseconds: 3_600_000 },
+  { pattern: "дн\\w*", milliseconds: 86_400_000 },
+  { pattern: "день\\w*", milliseconds: 86_400_000 },
+  { pattern: "недел\\w*", milliseconds: 604_800_000 },
+  { pattern: "месяц\\w*", milliseconds: 2_592_000_000 },
 ];
 
-/** Формулировка срока встречается в тексте источника. */
+/**
+ * Формулировка срока встречается в тексте источника.
+ *
+ * Нормализация: регистр, пробелы и тире. Иначе «в течение 120 минут» и
+ * «в течение  120  минут» считались бы разными формулировками.
+ */
 function containsPhrase(sourceText: string, phrase: string): boolean {
-  // Нормализация: регистр, пробелы и тире. Иначе «в течение 120 минут» и
-  // «в течение  120  минут» считались бы разными формулировками.
-  const normalize = (text: string): string =>
-    text
+  const normalize = (value: string): string =>
+    value
       .toLowerCase()
       .replace(/[‐-―−]/gu, "-")
       .replace(/\s+/gu, " ")
       .trim();
   return normalize(sourceText).includes(normalize(phrase));
 }
+
+type Deadline = {
+  /** Формулировка срока как её написала модель. */
+  phrase: string;
+  /** Вычисленный срок. */
+  dueAt: string;
+};
 
 /**
  * Ищет срок в тексте ответа модели.
@@ -157,11 +179,7 @@ function findDeadline(text: string, now: Date): Deadline | null {
   }
 
   for (const unit of DURATION_UNITS) {
-    const pattern = new RegExp(
-      `(\\d+)\\s*(${unit.pattern}\\w*)`,
-      "iu",
-    );
-    const match = pattern.exec(text);
+    const match = new RegExp(`(\\d+)\\s*(${unit.pattern})`, "iu").exec(text);
     if (!match) continue;
     const amount = Number(match[1]);
     if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -206,52 +224,95 @@ function findRawEmail(...texts: Array<string | null>): string | null {
   return null;
 }
 
+/** Разобранная строка-маркер обязательства. */
+type PromiseMarker = {
+  text: string;
+  deadline: string | null;
+  sourceRef: number | null;
+};
+
+/**
+ * Разбирает строку-маркер обязательства.
+ *
+ * Формат: `ОБЕЩАНИЕ: <текст> | срок: <формулировка> | источник: [N]`.
+ * Неизвестные части игнорируются: обязательство не должно появляться из
+ * текста, который ядро не понимает.
+ */
+function parsePromiseMarker(line: string): PromiseMarker | null {
+  const match = PROMISE_MARKER.exec(line);
+  const body = match?.[1];
+  if (!body) return null;
+
+  let text = "";
+  let deadline: string | null = null;
+  let sourceRef: number | null = null;
+
+  for (const part of body.split("|")) {
+    const segment = part.trim();
+    if (segment.length === 0) continue;
+    const deadlineMatch = /^срок\s*:\s*(.+)$/iu.exec(segment);
+    if (deadlineMatch) {
+      deadline = deadlineMatch[1]?.trim() ?? null;
+      continue;
+    }
+    const sourceMatch = /^источник\s*:\s*(.+)$/iu.exec(segment);
+    if (sourceMatch) {
+      const ref = SOURCE_REF_PATTERN.exec(sourceMatch[1]?.trim() ?? "");
+      sourceRef = ref ? Number(ref[1]) : null;
+      continue;
+    }
+    if (text.length === 0) text = segment;
+  }
+
+  if (text.length === 0 && deadline === null) return null;
+  return { text, deadline, sourceRef };
+}
+
 /**
  * Разбирает ответ модели в кандидат в обещание.
  *
- * Обещание ищется по явному маркеру `ОБЕЩАНИЕ:`: без маркера ответ не
- * содержит обязательства, и фиксировать нечего. Возвращается `null`,
- * если в ответе обещания нет.
+ * Обещание ищется по строке-маркеру: без неё ответ не содержит
+ * обязательства, и фиксировать нечего. Возвращается `null`, если в ответе
+ * обещания нет.
  */
 export function candidateFromAnswer(
   answerText: string,
   context: CandidateContext,
+  sources: ConfirmedSource[] = [],
 ): PromiseCandidate | null {
-  const marker = PROMISE_MARKER.exec(answerText);
+  const marker = parsePromiseMarker(answerText);
   if (!marker) return null;
 
-  const before = answerText.slice(0, marker.index).trim();
-  const after = answerText
-    .slice(marker.index + marker[0].length)
-    .replace(/^[:—–-]\s*/u, "")
-    .trim();
-
-  const text = before.length > 0 ? before : after;
-
-  // Срок идёт сразу за маркером; если там его нет, ищем по всему ответу.
-  const deadlineSource = after.length > 0 ? after : answerText;
-  const deadlineMatch = findDeadline(deadlineSource, new Date());
-  const fallbackDeadline =
-    deadlineMatch ?? findDeadline(answerText, new Date());
-
-  const sourceMatch = /источник\s*[:—–-]\s*([A-Za-z_]+)\s*[:/]\s*([^\s,;]+)/iu.exec(
-    answerText,
-  );
-
-  const label = findEmailLabel(text, context.clientText);
+  const label = findEmailLabel(marker.text, context.clientText);
   const rawEmail = label ? null : findRawEmail(context.clientText);
 
+  // Номер источника из подсказки промпта превращается в идентификатор
+  // подтверждённого источника: модель не может сослаться на источник,
+  // которого нет в списке.
+  const referenced =
+    marker.sourceRef !== null ? sources[marker.sourceRef - 1] : undefined;
+
   return {
-    text,
-    deadline: fallbackDeadline?.phrase ?? null,
+    text: marker.text,
+    deadline: marker.deadline,
     owner: null,
-    sourceKind: sourceMatch?.[1] ?? null,
-    sourceId: sourceMatch?.[2] ?? null,
+    sourceKind: referenced?.kind ?? null,
+    sourceId: referenced?.id ?? null,
     channel: context.channel === "max" ? "max" : "email",
     externalChatId: context.channel === "max" ? context.externalChatId : null,
     contactLabel: label,
     contactEmail: label ? (context.contactEmail ?? null) : rawEmail,
   };
+}
+
+/**
+ * Вырезает строку-маркер обязательства из текста ответа.
+ *
+ * Клиенту маркер не показывается: это внутренний формат, по которому ядро
+ * понимает, что модель взяла обязательство.
+ */
+export function stripPromiseMarker(answerText: string): string {
+  return answerText.replace(PROMISE_MARKER, "\n").replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 function rejected(reason: PromiseRejectionReason, detail: string): PromiseExtraction {
@@ -344,7 +405,7 @@ export function extractPromise(
     }
   }
 
-  const owner = ownerFromSource(source.text) ?? "manager";
+  const owner = ownerFromSource(source.text) ?? candidate.owner ?? "manager";
 
   return {
     kind: "promise",
