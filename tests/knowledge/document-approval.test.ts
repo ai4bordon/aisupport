@@ -157,7 +157,10 @@ describe("одобрение документа и ответ агента", () 
 
     expect(outcome.outcome).toBe("respond");
     if (outcome.outcome !== "respond") return;
-    expect(outcome.answer.text).toContain("нет ответа");
+    // Клиенту сообщается об отсутствии точного ответа; где именно агент
+    // искал, в тексте не упоминается.
+    expect(outcome.answer.text).toContain("нет точного ответа");
+    expect(outcome.answer.text).not.toMatch(/баз[ае] знаний/i);
     expect(outcome.answer.sources.map((source) => source.id)).not.toContain(documentId);
 
     const retrieve = outcome.steps.find((step) => step.node === "retrieve");

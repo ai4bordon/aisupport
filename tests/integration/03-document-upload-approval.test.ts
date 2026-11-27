@@ -292,7 +292,8 @@ describe("03 — загрузка, индексация и утверждени�
     });
     expect(outcome.outcome).toBe("respond");
     if (outcome.outcome !== "respond") return;
-    expect(outcome.answer.text).toContain("нет ответа");
+    expect(outcome.answer.text).toContain("нет точного ответа");
+    expect(outcome.answer.text).not.toMatch(/баз[ае] знаний/i);
     expect(outcome.answer.sources.map((source) => source.id)).not.toContain(body.id);
   });
 
