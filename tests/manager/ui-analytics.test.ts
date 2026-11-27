@@ -116,21 +116,21 @@ const SAMPLE_PAYLOAD: AnalyticsPayload = {
     dialogs: 3,
     total_rub: 3.75,
     avg_rub: 1.25,
-    min_rub: 0.5,
+    min_rub: 0.75,
     max_rub: 2,
     tokens_in: 300,
     tokens_out: 120,
   },
   auto_close: {
-    dialogs_total: 4,
-    closed_by_agent: 3,
-    share: 0.75,
-    without_manager: 2,
+    dialogs_total: 3,
+    closed_by_agent: 2,
+    share: 0.6667,
+    without_manager: 1,
     with_manager_confirmed_quote: 1,
   },
   first_response: {
-    samples: 3,
-    avg_ms: 45000,
+    samples: 2,
+    avg_ms: 52500,
     target_ms: 120000,
     meets_target: true,
   },
@@ -407,7 +407,7 @@ describe("состояния раздела аналитики", () => {
     render(createElement(AnalyticsClient));
     const region = await screen.findByRole("region", { name: "Стоимость диалога" });
     expect(within(region).getByText("1,25 ₽")).toBeInTheDocument();
-    expect(within(region).getByText("0,50 ₽")).toBeInTheDocument();
+    expect(within(region).getByText("0,75 ₽")).toBeInTheDocument();
     expect(within(region).getByText("2,00 ₽")).toBeInTheDocument();
   });
 
@@ -415,9 +415,9 @@ describe("состояния раздела аналитики", () => {
     mockAnalyticsResponse();
     render(createElement(AnalyticsClient));
     const region = await screen.findByRole("region", { name: "Доля автозакрытия" });
-    expect(within(region).getByText("75 %")).toBeInTheDocument();
+    expect(within(region).getByText("67 %")).toBeInTheDocument();
     expect(
-      within(region).getByText(/2 обращения закрыл агент без менеджера/i),
+      within(region).getByText(/1 обращение закрыл агент без менеджера/i),
     ).toBeInTheDocument();
     expect(
       within(region).getByText(/1 обращение закрыто по подтверждённому КП/i),
@@ -428,7 +428,7 @@ describe("состояния раздела аналитики", () => {
     mockAnalyticsResponse();
     render(createElement(AnalyticsClient));
     const region = await screen.findByRole("region", { name: "Средний первый ответ" });
-    expect(within(region).getByText("45 с")).toBeInTheDocument();
+    expect(within(region).getByText("53 с")).toBeInTheDocument();
     expect(within(region).getByText(/ориентир 2 минуты/i)).toBeInTheDocument();
   });
 
@@ -452,7 +452,7 @@ describe("состояния раздела аналитики", () => {
     mockAnalyticsResponse(EMPTY_PAYLOAD);
     render(createElement(AnalyticsClient));
     expect(await screen.findByText("Обращений пока нет")).toBeInTheDocument();
-    expect(screen.queryByText("75 %")).not.toBeInTheDocument();
+    expect(screen.queryByText("67 %")).not.toBeInTheDocument();
   });
 });
 
