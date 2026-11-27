@@ -35,9 +35,35 @@ export type ModelResult = {
   tokensIn: number;
   tokensOut: number;
   costRub: number;
+  /**
+   * Источник стоимости вызова.
+   *
+   * `provider` — цена из ответа провайдера (`usage.opencode.list_cost`);
+   * `tariff` — оценка по тарифу модели, потому что провайдер цену не отдал;
+   * `unknown` — стоимость в рублях вычислить не удалось.
+   *
+   * Поле необязательное: клиенты, подставленные в тестах и песочнице,
+   * стоимость не считают. Отсутствие поля означает «стоимость не считалась».
+   */
+  costSource?: CostSource;
+  /**
+   * Пометка к стоимости: чем она посчитана и почему может быть нулевой.
+   *
+   * Ноль без пометки читался бы как «модель бесплатна», а это разные
+   * факты: «цена провайдера неизвестна» и «вызов ничего не стоил».
+   */
+  costNote?: string | null;
   /** Идентификатор модели без ключа — попадает в трассу. */
   model: string;
 };
+
+/**
+ * Источник стоимости вызова модели.
+ *
+ * Разные источники означают разные факты, поэтому они различаются явно:
+ * ноль без признака означал бы «модель бесплатна».
+ */
+export type CostSource = "provider" | "tariff" | "unknown";
 
 export type ModelClient = {
   complete: (request: ModelRequest) => Promise<ModelResult>;
@@ -133,36 +159,185 @@ async function describeProviderFailure(response: Response): Promise<string> {
 }
 
 /**
- * Курс доллара в рулях для перевода стоимости вызова модели.
+ * Курс доллара в рулях: только из окружения.
  *
  * Провайдер считает стоимость в долларах, а трасса и счётчики бюджета
  * работают в рублях. Курс задаётся конфигом: `MODEL_USD_TO_RUB`.
+ *
+ * Зашитого курса в коде нет: денежный фолбэк молча менял бы экономику
+ * демо на 10–25 %. Переменная обязательна для расчёта в рублях; без неё
+ * стоимость помечается как неизвестная (см. `resolveUsdToRub`).
  */
-export const DEFAULT_USD_TO_RUB = 100;
+const USD_TO_RUB_ENV = "MODEL_USD_TO_RUB";
 
 /**
- * Стоимость вызова в рублях по данным провайдера.
+ * Тариф моделей: долларов за токен.
+ *
+ * Значения выведены из проверочных трасс ADR-0007: `deepseek-v4.1-flash` —
+ * 238 токенов при `list_cost` $0.00011445, `deepseek-v4-pro` — 1363 токена
+ * при `list_cost` $0.00254562. Это средняя цена токена по конкретным
+ * ответам, а не прайс провайдера, поэтому оценка всегда идёт с пометкой.
+ *
+ * Модель без тарифа стоимости не получает: цена неизвестна, и это
+ * объявляется явно.
+ */
+const MODEL_TARIFFS: ReadonlyArray<{
+  /** Признак имени модели: входит в идентификатор модели. */
+  match: string;
+  /** Долларов за один токен (вход и выход вместе). */
+  usdPerToken: number;
+}> = [
+  {
+    match: "deepseek-v4.1-flash",
+    // 0.00011445 $ / 238 токенов.
+    usdPerToken: 4.8088e-7,
+  },
+  {
+    match: "deepseek-v4-pro",
+    // 0.00254562 $ / 1363 токена.
+    usdPerToken: 1.8678e-6,
+  },
+];
+
+/**
+ * Курс доллара в рулях из окружения.
+ *
+ * Возвращает курс и, если курса нет, явную причину: без курса стоимость
+ * в рублях не вычислить, и это не то же самое, что «вызов ничего не стоил».
+ */
+function resolveUsdToRub(): { rate: number | null; problem: string | null } {
+  const raw = process.env[USD_TO_RUB_ENV];
+  if (raw === undefined || raw.trim() === "") {
+    return {
+      rate: null,
+      problem: `${USD_TO_RUB_ENV} не задан: стоимость в рублях не считается`,
+    };
+  }
+  const rate = Number.parseFloat(raw);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return {
+      rate: null,
+      problem: `${USD_TO_RUB_ENV} задан некорректно («${raw}»): нужен положительный курс`,
+    };
+  }
+  return { rate, problem: null };
+}
+
+/**
+ * Тариф модели в долларах за токен.
+ *
+ * Модель без тарифа возвращает `null`: цена такой модели неизвестна, и
+ * подставлять чужую было бы выдумкой.
+ */
+function tariffFor(model: string): number | null {
+  for (const tariff of MODEL_TARIFFS) {
+    if (model.includes(tariff.match)) return tariff.usdPerToken;
+  }
+  return null;
+}
+
+/**
+ * Токены вызова по ответу провайдера.
+ *
+ * Значения приводятся к конечным числам: провайдер может не отдать счётчик,
+ * и тогда токенов ноль — это факт «счётчика нет», а не `NaN` в трассе.
+ */
+function usageTokens(usage: unknown): { tokensIn: number; tokensOut: number } {
+  const record = (usage ?? {}) as {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+  const tokensIn = Number.isFinite(record.prompt_tokens) ? (record.prompt_tokens ?? 0) : 0;
+  const tokensOut = Number.isFinite(record.completion_tokens)
+    ? (record.completion_tokens ?? 0)
+    : 0;
+  return { tokensIn, tokensOut };
+}
+
+/**
+ * Округление стоимости до четырёх знаков.
+ *
+ * Та же точность, что у `usage_counters.spend_rub`. Округление до копеек
+ * обнуляло бы стоимость дешёвых вызовов (классификация стоит доли копейки),
+ * и в трассе экономика выглядела бы как «модель бесплатна».
+ */
+function roundRub(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+/**
+ * Стоимость вызова в рублях и источник, из которого она получена.
  *
  * OpenCode Go в ответе отдаёт `usage.opencode.list_cost` — полную цену
  * вызова в долларах — и `usage.opencode.allowance` — часть, покрытую
  * подпиской. В трассу идёт полная стоимость: экономика демо считается по
  * факту, а не по остатку подписки.
+ *
+ * Порядок источников:
+ * 1. цена провайдера (`list_cost`) — факт;
+ * 2. тариф модели по числу токенов — оценка, всегда с пометкой;
+ * 3. ничего не известно — стоимость неизвестна, а не ноль.
  */
-function costRubFromUsage(usage: unknown): number {
+function costFromUsage(
+  usage: unknown,
+  model: string,
+): { costRub: number; source: CostSource; note: string | null } {
   const record = (usage ?? {}) as {
     opencode?: { list_cost?: number; allowance?: number };
   };
+  const { rate, problem } = resolveUsdToRub();
   const listCost = record.opencode?.list_cost;
-  if (typeof listCost !== "number" || !Number.isFinite(listCost) || listCost <= 0) {
-    return 0;
+  const hasProviderCost =
+    typeof listCost === "number" && Number.isFinite(listCost) && listCost > 0;
+
+  // Без курса стоимость в рублях не вычислить ни по какому источнику.
+  if (rate === null) {
+    return { costRub: 0, source: "unknown", note: problem };
   }
-  const rate = Number.parseFloat(process.env.MODEL_USD_TO_RUB ?? "");
-  const usdToRub = Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_USD_TO_RUB;
-  // Округление до четырёх знаков — та же точность, что у
-  // `usage_counters.spend_rub`. Округление до копеек обнуляло бы стоимость
-  // дешёвых вызовов (классификация стоит доли копейки), и в трассе
-  // экономика выглядела бы как «модель бесплатна».
-  return Math.round(listCost * usdToRub * 10_000) / 10_000;
+
+  if (hasProviderCost) {
+    return { costRub: roundRub(listCost * rate), source: "provider", note: null };
+  }
+
+  const { tokensIn, tokensOut } = usageTokens(usage);
+  const tokens = tokensIn + tokensOut;
+  const usdPerToken = tariffFor(model);
+  if (usdPerToken === null || tokens <= 0) {
+    return {
+      costRub: 0,
+      source: "unknown",
+      note: `Цена вызова провайдером не отдана, тариф модели «${model}» неизвестен: стоимость неизвестна`,
+    };
+  }
+
+  return {
+    costRub: roundRub(tokens * usdPerToken * rate),
+    source: "tariff",
+    note: `Цена вызова провайдером не отдана: стоимость оценена по тарифу модели «${model}» (${tokens} токенов)`,
+  };
+}
+
+/**
+ * Суммы, которые модель заявила: только конечные числа.
+ *
+ * Модель может вернуть в `amounts` строку, `null` или `NaN`. Такие значения
+ * не суммы: `NaN` в ответе превращался в нарушение «сумма не найдена в
+ * источнике» или в `NaN` в трассе. Конечные числа сохраняются как есть.
+ */
+function parseAmounts(values: unknown[]): number[] {
+  const amounts: number[] = [];
+  for (const value of values) {
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) amounts.push(value);
+      continue;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) amounts.push(parsed);
+    }
+    // `null`, `undefined`, объекты и нечисловые строки — не суммы.
+  }
+  return amounts;
 }
 
 /**
@@ -172,7 +347,7 @@ function costRubFromUsage(usage: unknown): number {
  * полями в JSON-ответе. Разбор не вычисляет ничего: только переносит
  * числа, названные моделью, чтобы валидатор сверил их с источником.
  */
-function parseModelPayload(payload: unknown): ModelResult {
+function parseModelPayload(payload: unknown, model: string): ModelResult {
   const record = (payload ?? {}) as {
     choices?: Array<{ message?: { content?: string } }>;
     usage?: {
@@ -202,7 +377,7 @@ function parseModelPayload(payload: unknown): ModelResult {
           citations?: string[];
         };
         if (typeof parsed.text === "string") text = parsed.text;
-        if (Array.isArray(parsed.amounts)) amounts = parsed.amounts.map(Number);
+        if (Array.isArray(parsed.amounts)) amounts = parseAmounts(parsed.amounts);
         if (Array.isArray(parsed.citations)) citations = parsed.citations.map(String);
       } catch {
         // Ответ не в JSON: берём текст как есть, суммы и цитаты не заявляются.
@@ -210,14 +385,19 @@ function parseModelPayload(payload: unknown): ModelResult {
     }
   }
 
+  const cost = costFromUsage(record.usage, model);
+  const { tokensIn, tokensOut } = usageTokens(record.usage);
+
   return {
     text,
     amounts,
     citations,
-    tokensIn: record.usage?.prompt_tokens ?? 0,
-    tokensOut: record.usage?.completion_tokens ?? 0,
-    costRub: costRubFromUsage(record.usage),
-    model: "",
+    tokensIn,
+    tokensOut,
+    costRub: cost.costRub,
+    costSource: cost.source,
+    costNote: cost.note,
+    model,
   };
 }
 
@@ -303,8 +483,8 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
         }
 
         const payload = (await response.json()) as unknown;
-        const result = parseModelPayload(payload);
-        return { ...result, model: options.model };
+        const result = parseModelPayload(payload, options.model);
+        return result;
       } catch (error) {
         if (error instanceof ModelUnavailableError) throw error;
         if (error instanceof Error && error.name === "AbortError") {
@@ -334,6 +514,10 @@ export const stubModelClient: ModelClient = {
     tokensIn: 0,
     tokensOut: 0,
     costRub: 0,
+    // Заглушка модель не вызывала: стоимость не считалась, и это отличается
+    // от «вызов стоил ноль».
+    costSource: "unknown",
+    costNote: "Модель не вызывалась: стоимость не считалась",
     model: "stub",
   }),
 };
