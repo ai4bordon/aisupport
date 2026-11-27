@@ -51,3 +51,10 @@ cookies.txt
 diag-*.ts
 headers.txt
 *.headers
+
+# Локальные артефакты отладки и дампы
+*.dump
+*.sql.gz
+pgerr.txt
+mkpdf.cjs
+test-tmp.pdf
