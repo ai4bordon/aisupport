@@ -16,6 +16,7 @@ import { startMaxAdapter, stopMaxAdapter } from "../src/channels/max/adapter";
 import { createChannelStateStore, createStatePool } from "../src/channels/max/state";
 import { maskPersonalData, restoreMaskedData } from "../src/core/mask";
 import { createMaskMappingStore } from "../src/core/mask-store";
+import { notifiesClient } from "../src/core/escalation-mode";
 import { isShadowMode, recordManagerQueue } from "../src/core/shadow-mode";
 import { getTenantId } from "../src/db/tenant";
 
@@ -80,6 +81,10 @@ async function main() {
     // `tenants.shadow_mode` и читается на каждое событие. Кэш в процессе
     // сделал бы отключение недействующим до перезапуска.
     shadowMode: async () => isShadowMode(statePool, tenantId),
+    // Уведомление об эскалации — отдельная возможность режима эскалации
+    // `notice` (ADR-0014). По умолчанию клиенту уходит только результат
+    // `respond` (ADR-0008).
+    notifiesEscalation: () => notifiesClient(),
     // В режиме тени результат не отправляется клиенту, а попадает в очередь
     // менеджера: тот же общий сервис, что и в веб-чате. Причина эскалации не
     // переписывается — наличие черновика в очереди не превращает эскалацию в

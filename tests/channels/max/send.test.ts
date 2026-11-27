@@ -115,6 +115,7 @@ describe("MAX-канал: обработка события", () => {
         return escalateOutcome;
       },
       shadowMode: async () => false,
+      notifiesEscalation: () => true,
     });
 
     const handled = await handleMaxUpdate(session, update("mid-2", 4242));
@@ -127,6 +128,25 @@ describe("MAX-канал: обработка события", () => {
     expect(client.sent[0]?.text).toBe(
       "Передал вопрос менеджеру, ответим в рабочее время.",
     );
+  });
+
+  /**
+   * По ADR-0008 в обычном режиме клиенту уходит только результат `respond`:
+   * эскалация не отправляется, а уведомление о ней включается отдельным
+   * портом (режим эскалации `notice` по ADR-0014).
+   */
+  it("при результате escalate без порта уведомления клиент ничего не получает", async () => {
+    const client = stubClient();
+    const session = await createMaxSession({
+      token: TOKEN,
+      client,
+      runAgent: async () => escalateOutcome,
+      shadowMode: async () => false,
+    });
+
+    await handleMaxUpdate(session, update("mid-escalate-quiet", 4242));
+
+    expect(client.sent).toHaveLength(0);
   });
 
   it("в режиме тени отправки нет ни при каком результате", async () => {

@@ -303,6 +303,9 @@ describe("интеграция MAX-канала с ядром", () => {
       client: createMaxClient(TOKEN, { baseUrl: max.baseUrl }),
       runAgent: coreClient.runAgent,
       shadowMode: async () => false,
+      // Уведомление об эскалации включается портом режима эскалации
+      // `notice` (ADR-0014).
+      notifiesEscalation: () => true,
     });
 
     await waitFor(() => max.sent.length === 1);
@@ -313,6 +316,30 @@ describe("интеграция MAX-канала с ядром", () => {
     expect(sent?.text).toBe("Передал вопрос менеджеру, ответим в рабочее время.");
     expect(sent?.text).not.toContain("час");
     expect(sent?.chatId).toBe("779");
+  });
+
+  it("без порта уведомления эскалация клиенту не отправляется", async () => {
+    const max = await startStubMax();
+    const core = await startStubCore();
+    openStubs.push(max.server, core.server);
+
+    max.queue.push([messageCreated("mid-esc-quiet", 790, "ESCALATE меня")]);
+
+    const coreClient = createCoreClient({ baseUrl: core.baseUrl });
+    await startMaxAdapter({
+      token: TOKEN,
+      client: createMaxClient(TOKEN, { baseUrl: max.baseUrl }),
+      runAgent: coreClient.runAgent,
+      shadowMode: async () => false,
+    });
+
+    await waitFor(() => core.requests.length === 1);
+    // Следующий запрос опроса — сигнал, что пачка обработана целиком: к этому
+    // моменту адаптер уже решил, отправлять ли уведомление.
+    await waitFor(() => max.updateRequests.length >= 2);
+
+    // По ADR-0008 в обычном режиме клиенту уходит только результат `respond`.
+    expect(max.sent).toHaveLength(0);
   });
 
   it("не отправляет ответ в MAX в режиме тени ни при каком результате", async () => {
