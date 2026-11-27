@@ -100,16 +100,17 @@
 | `tenant_id` | uuid | FK, not null |
 | `conversation_id` | uuid | FK, not null |
 | `text` | text | not null |
+| `channel` | text | not null; `max` или `email` |
+| `recipient` | text | not null; диалог MAX или email-адресат веб-доставки |
+| `contact_label` | text | null; метка email для модели/трассы |
 | `due_at` | timestamptz | not null |
 | `owner` | text | not null |
-| `status` | text | not null; `open`, `done`, `overdue` |
+| `status` | text | not null; `promised`, `preparing`, `sent`, `overdue` |
 | `reminded_at` | timestamptz | null |
 | `created_at` | timestamptz | not null, default now() |
 
 Индекс: `(tenant_id, status, due_at)`.
-
 ### 3.6 `products`
-
 Источник — фид `Mindbox.yml.gz.xml` заказчика: 136 040 позиций, 1 232 вендора, валюта RUR.
 
 | Колонка | Тип | Ограничения |
