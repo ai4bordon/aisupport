@@ -441,7 +441,7 @@ const TASK_DESCRIPTION_STEMS = [
   "срок",
   "лиценз",
   "программ",
-  "подобрать",
+  "подбер",
   "вариант",
   "решение",
   "задач",
@@ -474,29 +474,69 @@ const TASK_DESCRIPTION_STEMS = [
   "внедрен",
   "поддержк",
   "продлен",
+  "средств",
+  "нужен",
 ];
 
 /**
  * Слово описания задачи.
  *
  * Сравнение по началу слова: «защита», «защиты» и «защитить» — одно и то же
- * слово в разных падежах.
+ * слово в разных падежах. «ё» приводится к «е»: «развёртываем» и
+ * «развертываем» — одно слово.
  */
 function isTaskDescriptionWord(word: string): boolean {
-  const lower = word.toLowerCase();
+  const lower = word.toLowerCase().replace(/ё/gu, "е");
   return TASK_DESCRIPTION_STEMS.some((stem) => lower.startsWith(stem));
 }
 
 /**
  * Похоже ли слово на название продукта.
  *
- * Название — это бренд: оно начинается с заглавной буквы или содержит
- * латиницу. Общее слово даже с заглавной буквы названием не является:
+ * Название — это бренд: в нём есть латиница или оно начинается с заглавной
+ * буквы. Общее слово даже с заглавной буквы названием не является:
  * «Защита почты» — описание задачи, а «MDaemon» — продукт.
+ *
+ * Слово короче трёх букв брендом не считается: иначе первая же предлоговая
+ * часть путевого имени («dr» из «Dr.Web») выдавала бы продукт за любой
+ * ответ на уточняющий вопрос.
  */
-function looksLikeBrandWord(word: string): boolean {
-  if (word.length < 3) return false;
-  return /^\p{Lu}/u.test(word) || /[a-z]/u.test(word);
+function isBrandWord(original: string, lower: string): boolean {
+  if (lower.length < 3) return false;
+  if (isTaskDescriptionWord(lower)) return false;
+  return /[a-z]/u.test(original) || /^\p{Lu}/u.test(original);
+}
+
+/**
+ * Слова текста, разобранные по границам: исходное и нижний регистр.
+ */
+function splitWords(text: string): Array<{ original: string; lower: string }> {
+  const original = text.split(/[^\p{L}\p{N}]+/u);
+  const lower = text.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  const words: Array<{ original: string; lower: string }> = [];
+  for (let index = 0; index < lower.length; index += 1) {
+    const value = lower[index] ?? "";
+    if (value.length === 0) continue;
+    words.push({ original: original[index] ?? value, lower: value });
+  }
+  return words;
+}
+
+/**
+ * Идентификатор названного продукта.
+ *
+ * Берётся первое брендоподобное слово: оно и называет продукт («MDaemon»,
+ * «Kaspersky»), а следующие слова описывают лицензию («Security Gateway»).
+ * Сравнение идентификаторов, а не целых названий, нужно потому, что клиент
+ * уточняет название («MDaemon» → «MDaemon Security Gateway») — это тот же
+ * продукт, а не смена предмета.
+ */
+export function productIdentity(text: string): string | null {
+  for (const word of splitWords(text)) {
+    if (STOP_WORDS.has(word.lower) || /^\d+$/u.test(word.lower)) continue;
+    if (isBrandWord(word.original, word.lower)) return word.lower;
+  }
+  return null;
 }
 
 /**
@@ -512,22 +552,8 @@ function looksLikeBrandWord(word: string): boolean {
  * названием не является: там нет ни заглавной буквы, ни латиницы.
  */
 export function explicitProductQuery(text: string): string | null {
-  const query = extractProductQuery(text);
-  if (query === null) return null;
-
-  // Слова исходного текста: по ним видно регистр и латиницу, а по нижнему
-  // регистру — смысл слова.
-  const parts = text.split(/[^\p{L}\p{N}]+/u);
-  const lowerParts = text.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-  for (let index = 0; index < lowerParts.length; index += 1) {
-    const lower = lowerParts[index] ?? "";
-    if (lower.length === 0) continue;
-    const original = parts[index] ?? lower;
-    if (STOP_WORDS.has(lower) || /^\d+$/u.test(lower)) continue;
-    if (isTaskDescriptionWord(lower)) continue;
-    if (looksLikeBrandWord(original)) return query;
-  }
-  return null;
+  if (productIdentity(text) === null) return null;
+  return extractProductQuery(text);
 }
 
 /**
@@ -637,27 +663,6 @@ export function extractSlots(text: string): RequirementSlots {
     // это развёртывание на сервере заказчика. Без этого слот не
     // распознавался, и агент повторял один и тот же вопрос.
     deployment = "сервер";
-  }
-
-  // Бюджет: «бюджета нет», «нет бюджета» и «не ограничен» — это ответ, а не
-  // отсутствие ответа. Без различения вопрос о бюджете повторялся бы.
-  let budget: string | null = null;
-  if (
-    /бюджет[\p{L}\p{N}]*\s+(?:нет|не\s+огранич|без\s+огранич)|нет\s+бюджет|без\s+бюджета|бюджета\s+нет|не\s+ограничен|без\s+ограничени/iu.test(
-      lower,
-    )
-  ) {
-    budget = "нет";
-  } else {
-    const budgetMatch = lower.match(
-      /(\d[\d\s ]*)\s*(?:руб|₽|тыс\.?\s*руб|р\.)/u,
-    );
-    if (budgetMatch?.[1]) {
-      const digits = budgetMatch[1].replace(/[^\d]/g, "");
-      if (digits.length > 0) {
-        budget = String(Number.parseInt(digits, 10));
-      }
-    }
   }
 
   return {
@@ -1188,11 +1193,15 @@ async function searchByDomain(
     ],
   );
   const matches: CatalogMatch[] = [];
+  // Карточки позиций читаются одним запросом: по одной на позицию доменный
+  // отбор давал десятки последовательных запросов.
+  const items = await loadCatalogItems(
+    options.tenantId,
+    result.rows.map((row) => row.offer_id),
+  );
   for (const row of result.rows) {
-    const item = await catalog.getByOfferId(row.offer_id, {
-      tenantId: options.tenantId,
-    });
-    if (item === null) continue;
+    const item = items.get(row.offer_id);
+    if (item === undefined) continue;
     matches.push(toMatch(item));
   }
   return matches;
@@ -1274,6 +1283,49 @@ function toMatch(item: CatalogItem): CatalogMatch {
 }
 
 /**
+ * Кэш справочника вендоров на процесс.
+ *
+ * Ключ — арендатор и снимок каталога: справочник вендоров — константа
+ * снимка, и перечитывать его на каждый каталожный ход означало тратить
+ * бюджет шага на `SELECT DISTINCT` по 136 тысячам позиций.
+ */
+const vendorCache = new Map<string, Promise<string[]>>();
+
+/** Текущий снимок каталога арендатора — по нему кэшируется справочник. */
+const snapshotCache = new Map<string, Promise<string | null>>();
+
+/**
+ * Идентификатор текущего снимка каталога.
+ *
+ * Снимок — константа на время между импортами, и справочник вендоров меняется
+ * вместе с ним: ключ кэша включает снимок, поэтому после импорта нового фида
+ * справочник перечитывается, а не остаётся от прежнего.
+ */
+async function currentSnapshotId(tenantId: string): Promise<string | null> {
+  const cached = snapshotCache.get(tenantId);
+  if (cached !== undefined) return cached;
+
+  const pending = (async () => {
+    const result = await getPool().query<{ id: string }>(
+      `SELECT id FROM catalog_snapshots
+        WHERE tenant_id = $1 AND is_current
+        ORDER BY fetched_at DESC
+        LIMIT 1`,
+      [tenantId],
+    );
+    return result.rows[0]?.id ?? null;
+  })();
+
+  snapshotCache.set(tenantId, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    snapshotCache.delete(tenantId);
+    throw error;
+  }
+}
+
+/**
  * Вендоры каталога — по ним узнаётся вендор в сообщении клиента.
  *
  * Список не ограничен: в фиде 1237 вендоров, и ограничение в 200 отсекало
@@ -1281,13 +1333,30 @@ function toMatch(item: CatalogItem): CatalogMatch {
  * запрос конкретного вендора и в ответ попадали позиции других производителей.
  */
 async function listVendors(tenantId: string): Promise<string[]> {
-  const result = await getPool().query<{ vendor: string }>(
-    `SELECT DISTINCT vendor FROM products
-      WHERE tenant_id = $1 AND vendor IS NOT NULL AND vendor <> ''
-      ORDER BY vendor`,
-    [tenantId],
-  );
-  return result.rows.map((row) => row.vendor);
+  const snapshotId = await currentSnapshotId(tenantId);
+  const cacheKey = `${tenantId}:${snapshotId ?? "-"}`;
+  const cached = vendorCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const pending = (async () => {
+    const result = await getPool().query<{ vendor: string }>(
+      `SELECT DISTINCT vendor FROM products
+        WHERE tenant_id = $1 AND vendor IS NOT NULL AND vendor <> ''
+        ORDER BY vendor`,
+      [tenantId],
+    );
+    return result.rows.map((row) => row.vendor);
+  })();
+
+  vendorCache.set(cacheKey, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    // Неудачный запрос не кэшируется: следующий ход должен попробовать
+    // снова, а не молча работать без справочника.
+    vendorCache.delete(cacheKey);
+    throw error;
+  }
 }
 
 /**
