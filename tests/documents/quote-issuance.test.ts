@@ -72,7 +72,7 @@ describe("выпуск КП: строки расчёта", () => {
   });
 
   it("позиция без найденной карточки в расчёт не попадает", () => {
-    const lines = quoteLines([{ offerId: "нет-такой" }], [match("1", 1200, true)]);
+    const lines = quoteLines([{ offerId: "нет-такой", quantity: 1 }], [match("1", 1200, true)]);
 
     expect(lines).toHaveLength(0);
   });
