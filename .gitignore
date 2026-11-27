@@ -43,3 +43,9 @@ next-env.d.ts
 .idea/
 .DS_Store
 Thumbs.db
+
+# Дампы запросов и отладочные файлы локального стенда
+chat-out.json
+chat-req.json
+cookies.txt
+diag-*.ts

@@ -110,9 +110,9 @@ type RenderedDocument = {
 
 **ДОПУЩЕНИЕ A-API-01:** все маршруты внешнего API обслуживаются Next.js Route Handlers; отдельный FastAPI-процесс не нужен. Заменяется решением владельца по стеку.
 
-**ДОПУЩЕНИЕ A-API-03:** основной LLM-адрес — `https://opencode.ai/inference/go/v1/chat/completions` через OpenCode Go с моделью DeepSeek; запасной адрес задаётся отдельным URL из переменных окружения. Go требует заголовок `x-opencode-session` со значением `ses_<идентификатор диалога>`; без него эндпоинт отвечает 400. Векторы — `https://opencode.ai/inference/go/openai/v1/embeddings`, модель `qwen3-embedding-8b`, размерность 1536; заголовок сессии для векторов не требуется.
+**ДОПУЩЕНИЕ A-API-03:** основной LLM-адрес — `https://opencode.ai/inference/go/v1/chat/completions` через OpenCode Go с моделью DeepSeek; запасной адрес задаётся отдельным URL из переменных окружения. Заголовок `x-opencode-session: ses_<идентификатор диалога>` обязателен для chat. Векторы — `https://opencode.ai/inference/go/openai/v1/embeddings`, модель `qwen3-embedding-8b`, `dimensions: 1536`; session-заголовок не требуется. `text-embedding-3-small` в Go не входит и не используется.
 
-Факт проверки 26.11: `GET https://opencode.ai/inference/go/v1/models` без ключа вернул `200`; `POST .../embeddings` без ключа не ответил за 20 с и был прерван по тайм-ауту. Адреса и доступность проверяются повторно на задаче 1 с ключом владельца; при отличии фиксируются в ADR.
+Живые проверки 27.11 подтвердили `deepseek-v4.1-flash` после включения Global-региона и резерв `gpt-5.6-luna`. Отказы доступа/региона/модели, в том числе HTTP 400/402/403, эскалируются с причиной. Проверенный тариф embeddings — $0.01 за 1M входных токенов; live-вызовы зависят от активной подписки/баланса владельца.
 
 ## 2. Соглашения
 

@@ -60,6 +60,10 @@ type QueueItem = {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Расширения вложений, которые не являются страницами. */
+const BINARY_EXTENSION_PATTERN =
+  /\.(png|jpe?g|gif|webp|svg|ico|bmp|tiff?|pdf|zip|gz|tar|7z|rar|mp3|mp4|mov|avi|webm|woff2?|ttf|otf|eot|exe|msi|docx?|xlsx?|pptx?)$/i;
+
 /**
  * Ключ дедупликации: адрес без хвостового слеша, без якоря и без запроса.
  * Хвостовой слешш в самом URL сохраняется — у store.softline.ru путь
@@ -97,6 +101,9 @@ function resolveLink(href: string, pageUrl: string): string | null {
     return null;
   }
   if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
+  // Изображения и прочие вложения — не страницы: их текст не извлечь, а
+  // бинарные байты ломают разбор UTF-8 при импорте.
+  if (BINARY_EXTENSION_PATTERN.test(resolved.pathname)) return null;
   resolved.hash = "";
   return resolved.toString();
 }
