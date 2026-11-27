@@ -1,11 +1,12 @@
-import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
+import { createHash, randomUUID } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
 import { ChatRequestSchema } from "@/contracts/chat";
 import { getPool } from "@/db/pool";
 import { getTenantId } from "@/db/tenant";
 import { maskPersonalData, restoreMaskedData } from "@/core/mask";
+import { createMaskMappingStore } from "@/core/mask-store";
 import { createsManagerQueue } from "@/core/escalation-mode";
-import { runAgent } from "@/core/run";
+import { runAgent, type AgentOutcome } from "@/core/run";
 import { buildSetCookie, readConversationId } from "@/core/session";
 import {
   isShadowMode,
@@ -18,23 +19,329 @@ import { validateOutgoingText } from "@/core/validate";
 /**
  * POST /v1/chat — веб-чат (docs/api-contract.md §4).
  *
- * Порядок: cookie → сверка conversation_id → маскирование → ядро →
- * восстановление меток → запись в базу → ответ по контракту.
+ * Порядок: cookie → сверка conversation_id → идемпотентность → маскирование →
+ * ядро → восстановление меток → запись хода в базу → ответ по контракту.
  *
  * Идентификация по IP не используется: диалог определяется только
- * подписанной cookie.
+ * подписанной cookie. Значение из тела запроса диалог не определяет — без
+ * подписанной cookie клиент получает новый диалог, а значение из тела
+ * используется только для сверки повтора.
  */
+
+/** Текст ошибки при отказе по проверке ответа. */
+const APPROVAL_REQUIRED_MESSAGE = "Ответ не прошёл проверку и не отправлен клиенту";
 
 function errorResponse(
   status: number,
   code: string,
   message: string,
   requestId: string,
+  details: Record<string, unknown> = {},
 ): Response {
   return Response.json(
-    { error: { code, message, details: {}, request_id: requestId } },
+    { error: { code, message, details, request_id: requestId } },
     { status },
   );
+}
+
+/**
+ * Ключ хода: идентификатор сообщения по тройке
+ * (арендатор, диалог, `client_message_id`).
+ *
+ * Уникальный индекс `messages (tenant_id, client_message_id)` в схеме общий
+ * на весь арендатор, а идемпотентность должна действовать в рамках диалога
+ * (docs/api-contract.md §4). Поэтому в колонке хранится не идентификатор
+ * сообщения клиента, а выведенный из тройки ключ хода: один и тот же
+ * `client_message_id` в двух диалогах даёт два разных ключа, и второе
+ * сообщение не теряется молча.
+ *
+ * Значение — UUID версии 5 по SHA-256: колонка объявлена как `uuid`.
+ */
+function turnKey(
+  tenantId: string,
+  conversationId: string,
+  clientMessageId: string,
+): string {
+  return uuidFromDigest(
+    createHash("sha256")
+      .update(`turn:${tenantId}:${conversationId}:${clientMessageId}`)
+      .digest(),
+  );
+}
+
+/**
+ * Ключ ответа хода.
+ *
+ * Ответ агента связан с исходным сообщением: повтор того же
+ * `client_message_id` возвращает ответ именно этого сообщения, а не
+ * последний ответ диалога.
+ */
+function replyKey(
+  tenantId: string,
+  conversationId: string,
+  clientMessageId: string,
+): string {
+  return uuidFromDigest(
+    createHash("sha256")
+      .update(`reply:${tenantId}:${conversationId}:${clientMessageId}`)
+      .digest(),
+  );
+}
+
+/** Случайные 16 байт в формате UUID версии 5. */
+function uuidFromDigest(digest: Buffer): string {
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+/**
+ * Описание эскалации хода.
+ *
+ * Связи «ход → эскалация» в схеме нет, а ответ хода должен восстанавливаться
+ * при повторе. Описание хранится в записи сообщения хода: поле `sources`
+ * записи-эскалации несёт идентификатор, причину, резюме и черновик.
+ */
+type EscalationDescriptor = {
+  kind: "escalation";
+  id: string;
+  reason: string;
+  summary: string;
+  draft: string | null;
+};
+
+/** Результат хода, восстановленный из переписки. */
+type TurnResult = {
+  outcome: "respond" | "escalate";
+  messageId: string;
+  answer: { text: string; sources: unknown[] } | null;
+  escalation: EscalationDescriptor | null;
+  /** Ответ не прошёл проверку и клиенту не отправлялся: повтор даёт тот же отказ. */
+  rejected: boolean;
+};
+
+/**
+ * Запись хода в переписку диалога.
+ *
+ * Сообщение клиента и ответ агента пишутся одной транзакцией: сбой хода не
+ * оставляет диалог в полусостоянии (сообщение без ответа).
+ *
+ * Исходный текст клиента в таблицу не попадает: `text_original` остаётся
+ * пустым, исходные значения лежат только в таблице соответствий меток.
+ */
+async function writeTurn(
+  pool: Pool,
+  turn: {
+    tenantId: string;
+    conversationId: string;
+    clientMessageId: string;
+    clientTextMasked: string;
+    reply: {
+      messageId: string;
+      role: "agent" | "manager";
+      textMasked: string;
+      sources: unknown[];
+    } | null;
+  },
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+         VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb)
+         ON CONFLICT DO NOTHING`,
+        [
+          turn.tenantId,
+          turn.conversationId,
+          turn.clientMessageId,
+          turn.clientTextMasked,
+        ],
+      );
+      if (turn.reply) {
+        await client.query(
+          `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
+           VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb)
+           ON CONFLICT DO NOTHING`,
+          [
+            turn.tenantId,
+            turn.conversationId,
+            turn.reply.messageId,
+            turn.reply.role,
+            turn.reply.textMasked,
+            JSON.stringify(turn.reply.sources),
+          ],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Создание диалога, если его ещё нет.
+ *
+ * Проверка владельца и вставка атомарны: конфликт по идентификатору означает,
+ * что диалог уже существует, и его владелец сверяется отдельно. Возвращается
+ * `false`, если диалог принадлежит другому арендатору
+ * (docs/data-model.md §5, R15).
+ */
+async function claimConversation(
+  pool: Pool,
+  tenantId: string,
+  conversationId: string,
+  clientRef: string,
+): Promise<boolean> {
+  const inserted = await pool.query<{ tenant_id: string }>(
+    `INSERT INTO conversations (id, tenant_id, channel, status, client_ref)
+     VALUES ($1, $2, 'web', 'open', $3)
+     ON CONFLICT (id) DO NOTHING
+     RETURNING tenant_id`,
+    [conversationId, tenantId, clientRef],
+  );
+  const row = inserted.rows[0];
+  if (row) return row.tenant_id === tenantId;
+
+  // Конфликт: диалог с таким идентификатором уже есть. Владелец сверяется
+  // отдельно — иначе проверка и вставка были бы разными действиями, и чужой
+  // диалог можно было бы занять.
+  const existing = await pool.query<{ tenant_id: string }>(
+    "SELECT tenant_id FROM conversations WHERE id = $1",
+    [conversationId],
+  );
+  const found = existing.rows[0];
+  if (!found) return false;
+  return found.tenant_id === tenantId;
+}
+
+/**
+ * Повтор хода: тот же `client_message_id` в том же диалоге.
+ *
+ * Ключ идемпотентности — (арендатор, диалог, `client_message_id`): тот же
+ * идентификатор в чужом диалоге не подхватывает ответ этого диалога.
+ * Возвращается результат именно этого хода.
+ */
+async function findTurn(
+  pool: Pool,
+  tenantId: string,
+  conversationIds: string[],
+  clientMessageId: string,
+  restore: (text: string) => Promise<string>,
+): Promise<TurnResult | null> {
+  if (conversationIds.length === 0) return null;
+
+  const keys = conversationIds.map((conversationId) =>
+    turnKey(tenantId, conversationId, clientMessageId),
+  );
+  const clientMessage = await pool.query<{
+    id: string;
+    conversation_id: string;
+  }>(
+    `SELECT id, conversation_id FROM messages
+      WHERE tenant_id = $1 AND role = 'client'
+        AND conversation_id = ANY($2::uuid[])
+        AND client_message_id = ANY($3::uuid[])
+      ORDER BY created_at ASC LIMIT 1`,
+    [tenantId, conversationIds, keys],
+  );
+  const clientRow = clientMessage.rows[0];
+  if (!clientRow) return null;
+
+  const conversationId = clientRow.conversation_id;
+  const replyMessageId = replyKey(tenantId, conversationId, clientMessageId);
+  const reply = await pool.query<{
+    id: string;
+    role: string;
+    text_masked: string;
+    sources: unknown;
+  }>(
+    `SELECT id, role, text_masked, sources FROM messages
+      WHERE tenant_id = $1 AND conversation_id = $2
+        AND client_message_id = $3 AND role IN ('agent', 'manager')`,
+    [tenantId, conversationId, replyMessageId],
+  );
+  const replyRow = reply.rows[0];
+
+  if (!replyRow) return null;
+
+  if (replyRow.role === "agent") {
+    const sources = Array.isArray(replyRow.sources) ? replyRow.sources : [];
+    return {
+      outcome: "respond",
+      messageId: replyMessageId,
+      answer: { text: await restore(replyRow.text_masked), sources },
+      escalation: null,
+      rejected: false,
+    };
+  }
+
+  const descriptor = (
+    Array.isArray(replyRow.sources) ? replyRow.sources[0] : undefined
+  ) as Partial<EscalationDescriptor> | undefined;
+  const escalation: EscalationDescriptor = {
+    kind: "escalation",
+    id: descriptor?.id ?? replyRow.id,
+    reason: descriptor?.reason ?? "no_confirmed_source",
+    summary: descriptor?.summary ?? "",
+    draft: descriptor?.draft ?? null,
+  };
+  return {
+    outcome: "escalate",
+    messageId: replyMessageId,
+    answer: null,
+    escalation,
+    rejected: escalation.reason === "validation_failed",
+  };
+}
+
+/**
+ * Запись в очередь менеджера.
+ *
+ * Ошибка записи не должна ронять ход: клиент получит ответ, а вопрос
+ * менеджеру появится в следующей записи. Поэтому исключение здесь
+ * превращается в пустой результат, а не в 500.
+ */
+async function recordManagerQueueSafely(
+  pool: Pool,
+  input: {
+    tenantId: string;
+    conversationId: string;
+    reason: string;
+    summary: string;
+    draft: string | null;
+    isShadow?: boolean;
+  },
+): Promise<string | null> {
+  try {
+    return await recordManagerQueue(pool, {
+      tenantId: input.tenantId,
+      conversationId: input.conversationId,
+      channel: "web",
+      reason: input.reason,
+      summary: input.summary,
+      result: input.draft ?? input.summary,
+      draft: input.draft,
+      sources: [],
+      traceRef: input.conversationId,
+      isShadow: input.isShadow === true,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -66,16 +373,16 @@ export async function POST(request: Request): Promise<Response> {
   // Диалог определяется подписанной cookie; тело только сверяется с ней.
   const cookieConversation = readConversationId(request.headers.get("cookie") ?? undefined);
   if (cookieConversation && cookieConversation.id !== body.conversation_id) {
+    // Идентификатор ожидаемого диалога возвращается в деталях: клиент без
+    // доступа к cookie (HttpOnly) иначе не сможет продолжить диалог.
     return errorResponse(
       403,
       "forbidden",
       "conversation_id не совпадает с подписанной cookie",
       requestId,
+      { conversation_id: cookieConversation.id },
     );
   }
-
-  const conversationId = cookieConversation?.id ?? body.conversation_id;
-  const isNewConversation = cookieConversation === null;
 
   let tenantId: string;
   try {
@@ -90,130 +397,69 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const pool = getPool();
+  const maskStore = createMaskMappingStore(pool);
 
   // Режим тени снимается один раз в начале обработки и действует на неё
   // целиком: переключение настройки посередине обработки не должно менять
   // её исход (docs/plans/06-shadow-mode.md, шаг 4).
   const shadowMode = await isShadowMode(pool, tenantId);
 
+  // Идентификатор диалога, который знает клиент: подписанная cookie, а без
+  // неё — значение из тела запроса. Он используется только для сверки
+  // повтора: подписанной cookie нет, значит диалог не продолжается.
+  const clientRef = cookieConversation?.id ?? body.conversation_id;
+
+  // Диалоги, в которых ищется повтор хода. С подписанной cookie это ровно
+  // один диалог; без неё — диалоги, созданные клиентом с таким значением.
+  const scope = await conversationScope(pool, tenantId, clientRef, cookieConversation !== null);
+
+  // Восстановление меток идёт по таблице соответствий диалога: она общая
+  // для всех каналов и накапливает значения ходов диалога.
+  const restore = async (text: string): Promise<string> => {
+    const mapping = await maskStore.load(clientRef);
+    return restoreMaskedData(text, mapping);
+  };
+
   // Идемпотентность: повтор client_message_id не создаёт второе обращение.
-  const existing = await pool.query<{ id: string }>(
-    "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2 AND role = 'client'",
-    [tenantId, body.message.client_message_id],
+  const repeated = await findTurn(
+    pool,
+    tenantId,
+    scope,
+    body.message.client_message_id,
+    restore,
   );
-  const existingMessage = existing.rows[0];
-
-  if (existingMessage) {
-    const previous = await pool.query<{
-      id: string;
-      outcome: string;
-      text_masked: string;
-      sources: unknown;
-    }>(
-      `SELECT m.id, m.text_masked, m.sources,
-              COALESCE((SELECT s.outcome FROM agent_steps s
-                        WHERE s.conversation_id = m.conversation_id
-                          AND s.outcome IS NOT NULL
-                        ORDER BY s.created_at DESC LIMIT 1), 'respond') AS outcome
-       FROM messages m
-       WHERE m.conversation_id = $1 AND m.role = 'agent'
-       ORDER BY m.created_at DESC LIMIT 1`,
-      [conversationId],
-    );
-    const previousRow = previous.rows[0];
-    const outcome = previousRow?.outcome ?? "respond";
-
+  if (repeated) {
     const headers: Record<string, string> = {};
-    if (isNewConversation) headers["Set-Cookie"] = buildSetCookie(conversationId);
-
-    if (outcome === "escalate") {
-      const escalation = await pool.query<{
-        id: string;
-        reason: string;
-        summary: string;
-        draft: string | null;
-      }>(
-        `SELECT id, reason, summary, draft FROM escalations
-         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1`,
-        [conversationId],
-      );
-      const row = escalation.rows[0];
-      return Response.json(
-        {
-          conversation_id: conversationId,
-          message_id: previousRow?.id ?? existingMessage.id,
-          outcome: "escalate",
-          answer: null,
-          escalation: row
-            ? {
-                id: row.id,
-                reason: row.reason,
-                summary: row.summary,
-                draft: row.draft,
-              }
-            : null,
-          trace: { steps: 0, tokens: 0, cost_rub: 0 },
-        },
-        { headers },
+    if (cookieConversation === null) {
+      headers["Set-Cookie"] = buildSetCookie(scope[0] ?? randomUUID());
+    }
+    if (repeated.rejected) {
+      return errorResponse(
+        422,
+        "approval_required",
+        APPROVAL_REQUIRED_MESSAGE,
+        requestId,
       );
     }
-
-    if (shadowMode) {
-      // В режиме тени ответ агента не отправлялся и в переписку не попал:
-      // повторный запрос того же `client_message_id` возвращает тот же
-      // технический результат — эскалацию с черновиком из очереди.
-      const escalation = await pool.query<{
-        id: string;
-        reason: string;
-        summary: string;
-        draft: string | null;
-      }>(
-        `SELECT id, reason, summary, draft FROM escalations
-         WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1`,
-        [conversationId],
-      );
-      const row = escalation.rows[0];
-      return Response.json(
-        {
-          conversation_id: conversationId,
-          message_id: existingMessage.id,
-          outcome: "escalate",
-          answer: null,
-          escalation: row
-            ? {
-                id: row.id,
-                reason: row.reason,
-                summary: row.summary,
-                draft: row.draft,
-              }
-            : null,
-          trace: { steps: 0, tokens: 0, cost_rub: 0 },
-        },
-        { headers },
-      );
-    }
-
     return Response.json(
       {
-        conversation_id: conversationId,
-        message_id: previousRow?.id ?? existingMessage.id,
-        outcome: "respond",
-        answer: {
-          text: previousRow?.text_masked ?? "",
-          sources: (previousRow?.sources as unknown[]) ?? [],
-        },
-        escalation: null,
+        conversation_id: scope[0] ?? clientRef,
+        message_id: repeated.messageId,
+        outcome: repeated.outcome,
+        answer: repeated.answer,
+        escalation: repeated.escalation,
         trace: { steps: 0, tokens: 0, cost_rub: 0 },
       },
       { headers },
     );
   }
 
-  // Маскирование до вызова модели: в модель уходят только метки.
-  const maskScope = await loadMaskScope(pool, tenantId, conversationId);
-  const masked = maskPersonalData(body.message.text, { mapping: maskScope.mapping });
+  // Диалог, в котором выполняется ход. С подписанной cookie это диалог
+  // cookie. Без неё — новый диалог: значение из тела запроса диалог не
+  // определяет и чужой диалог не продолжает.
+  const conversationId = cookieConversation?.id ?? randomUUID();
 
-  const claimed = await claimConversation(pool, tenantId, conversationId);
+  const claimed = await claimConversation(pool, tenantId, conversationId, clientRef);
   if (!claimed) {
     return errorResponse(
       403,
@@ -223,53 +469,130 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Соответствия меток сохраняются в таблице соответствий диалога: без них
-  // исходные значения меток негде взять, и адрес клиента не восстановить.
-  // В MAX это делает воркер через порт маскирования; веб-чат обязан сохранить
-  // соответствия сам, иначе обещание в веб-канале невозможно — адрес
-  // обязателен, а восстановить его не из чего.
+  // Маскирование до вызова модели: в модель уходят только метки. Таблица
+  // соответствий диалога читается до маскирования, поэтому метки одного
+  // диалога накапливаются и восстанавливаются во всех ходах.
+  const known = await maskStore.load(conversationId);
+  const masked = maskPersonalData(body.message.text, { mapping: known });
   if (masked.maskedFieldsCount > 0) {
-    await saveMaskScope(pool, conversationId, masked.mapping);
+    await maskStore.save(conversationId, masked.mapping);
   }
 
-  await pool.query(
-    `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-     VALUES ($1, $2, $3, 'client', $4, $5, '[]'::jsonb)
-     ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
-    [tenantId, conversationId, body.message.client_message_id, masked.maskedText, body.message.text],
+  const messageKey = turnKey(
+    tenantId,
+    conversationId,
+    body.message.client_message_id,
+  );
+  const replyMessageId = replyKey(
+    tenantId,
+    conversationId,
+    body.message.client_message_id,
   );
 
-  const outcome = await runAgent({
-    conversationId,
-    messageId: body.message.client_message_id,
-    channel: "web",
-    externalChatId: null,
-    text: masked.maskedText,
-    maskedFieldsCount: masked.maskedFieldsCount,
-    tenantId,
-  });
+  let outcome: AgentOutcome;
+  try {
+    outcome = await runAgent({
+      conversationId,
+      messageId: messageKey,
+      channel: "web",
+      externalChatId: null,
+      text: masked.maskedText,
+      maskedFieldsCount: masked.maskedFieldsCount,
+      tenantId,
+    });
+  } catch {
+    // Сбой ядра не оставляет диалог в полусостоянии: сообщение клиента и
+    // результат хода пишутся одной транзакцией, а ход с ошибкой
+    // фиксируется как отказ, а не как сообщение без ответа.
+    const summary = "Ход не обработан: сбой агентного цикла.";
+    const escalationId = createsManagerQueue()
+      ? await recordManagerQueueSafely(pool, {
+          tenantId,
+          conversationId,
+          reason: "internal_error",
+          summary,
+          draft: null,
+        })
+      : null;
+    await writeTurn(pool, {
+      tenantId,
+      conversationId,
+      clientMessageId: messageKey,
+      clientTextMasked: masked.maskedText,
+      reply: {
+        messageId: replyMessageId,
+        role: "manager",
+        textMasked: "",
+        sources: [
+          {
+            kind: "escalation",
+            id: escalationId ?? randomUUID(),
+            reason: "internal_error",
+            summary,
+            draft: null,
+          } satisfies EscalationDescriptor,
+        ],
+      },
+    });
+    return Response.json(
+      {
+        conversation_id: conversationId,
+        message_id: replyMessageId,
+        outcome: "escalate",
+        answer: null,
+        escalation: {
+          id: escalationId ?? randomUUID(),
+          reason: "internal_error",
+          summary,
+          draft: null,
+        },
+        trace: { steps: 0, tokens: 0, cost_rub: 0 },
+      },
+      { headers: {} },
+    );
+  }
 
   const headers: Record<string, string> = {};
-  if (isNewConversation) headers["Set-Cookie"] = buildSetCookie(conversationId);
+  if (cookieConversation === null) {
+    headers["Set-Cookie"] = buildSetCookie(conversationId);
+  }
 
   // Ответ, не прошедший проверку, клиенту не отправляется: 422, а не 200
   // с эскалацией — контракт §2 относит непройденную проверку к 422.
   if (outcome.outcome === "escalate" && outcome.escalation.reason === "validation_failed") {
-    await recordManagerQueue(pool, {
+    const escalationId = await recordManagerQueueSafely(pool, {
       tenantId,
       conversationId,
-      channel: "web",
       reason: "validation_failed",
       summary: outcome.escalation.summary,
-      result: outcome.escalation.draft ?? outcome.escalation.summary,
       draft: outcome.escalation.draft,
-      sources: [],
-      traceRef: conversationId,
+    });
+    await writeTurn(pool, {
+      tenantId,
+      conversationId,
+      clientMessageId: messageKey,
+      clientTextMasked: masked.maskedText,
+      reply: {
+        messageId: replyMessageId,
+        role: "manager",
+        // Ответ, отклонённый проверкой, в переписку не попадает: в записи
+        // хода остаётся только сам факт отказа.
+        textMasked: "",
+        sources: [
+          {
+            kind: "escalation",
+            id: escalationId ?? randomUUID(),
+            reason: "validation_failed",
+            summary: outcome.escalation.summary,
+            draft: outcome.escalation.draft,
+          } satisfies EscalationDescriptor,
+        ],
+      },
     });
     return errorResponse(
       422,
       "approval_required",
-      "Ответ не прошёл проверку и не отправлен клиенту",
+      APPROVAL_REQUIRED_MESSAGE,
       requestId,
     );
   }
@@ -293,21 +616,39 @@ export async function POST(request: Request): Promise<Response> {
       restoredSources.map((source) => source.text),
     );
     if (!outgoing.valid) {
-      await recordManagerQueue(pool, {
+      const summary =
+        "Ответ не прошёл проверку на персональные данные — передаём менеджеру.";
+      const escalationId = await recordManagerQueueSafely(pool, {
         tenantId,
         conversationId,
-        channel: "web",
         reason: "validation_failed",
-        summary: "Ответ не прошёл проверку на персональные данные — передаём менеджеру.",
-        result: "Ответ не прошёл проверку на персональные данные — передаём менеджеру.",
+        summary,
         draft: null,
-        sources: [],
-        traceRef: conversationId,
+      });
+      await writeTurn(pool, {
+        tenantId,
+        conversationId,
+        clientMessageId: messageKey,
+        clientTextMasked: masked.maskedText,
+        reply: {
+          messageId: replyMessageId,
+          role: "manager",
+          textMasked: "",
+          sources: [
+            {
+              kind: "escalation",
+              id: escalationId ?? randomUUID(),
+              reason: "validation_failed",
+              summary,
+              draft: null,
+            } satisfies EscalationDescriptor,
+          ],
+        },
       });
       return errorResponse(
         422,
         "approval_required",
-        "Ответ не прошёл проверку и не отправлен клиенту",
+        APPROVAL_REQUIRED_MESSAGE,
         requestId,
       );
     }
@@ -335,10 +676,33 @@ export async function POST(request: Request): Promise<Response> {
         traceRef: conversationId,
       });
 
+      await writeTurn(pool, {
+        tenantId,
+        conversationId,
+        clientMessageId: messageKey,
+        clientTextMasked: masked.maskedText,
+        reply: {
+          messageId: replyMessageId,
+          role: "manager",
+          // Ответ агента в тени клиенту не отправлялся: в переписку он не
+          // попадает, запись хода хранит только сам факт обработки.
+          textMasked: "",
+          sources: [
+            {
+              kind: "escalation",
+              id: queueId,
+              reason: SHADOW_REASON,
+              summary: "Ответ подготовлен и передан менеджеру.",
+              draft: outcome.answer.text,
+            } satisfies EscalationDescriptor,
+          ],
+        },
+      });
+
       return Response.json(
         {
           conversation_id: conversationId,
-          message_id: body.message.client_message_id,
+          message_id: replyMessageId,
           outcome: "escalate",
           answer: null,
           escalation: {
@@ -353,31 +717,31 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const agentMessage = await pool.query<{ id: string }>(
-      `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-       VALUES ($1, $2, $3, 'agent', $4, $5, $6::jsonb)
-       RETURNING id`,
-      [
-        tenantId,
-        conversationId,
-        randomUUID(),
-        outcome.answer.text,
-        restored,
-        JSON.stringify(
-          restoredSources.map((source) => ({
-            kind: source.kind,
-            id: source.id,
-            title: source.title,
-            location: source.location,
-          })),
-        ),
-      ],
-    );
+    await writeTurn(pool, {
+      tenantId,
+      conversationId,
+      clientMessageId: messageKey,
+      clientTextMasked: masked.maskedText,
+      reply: {
+        messageId: replyMessageId,
+        role: "agent",
+        // Ответ агента сохраняется замаскированным: исходные значения
+        // восстанавливаются по таблице соответствий диалога, а в таблицу
+        // сообщений сырые персональные данные не попадают.
+        textMasked: outcome.answer.text,
+        sources: restoredSources.map((source) => ({
+          kind: source.kind,
+          id: source.id,
+          title: source.title,
+          location: source.location,
+        })),
+      },
+    });
 
     return Response.json(
       {
         conversation_id: conversationId,
-        message_id: agentMessage.rows[0]?.id ?? body.message.client_message_id,
+        message_id: replyMessageId,
         outcome: "respond",
         answer: {
           text: restored,
@@ -406,19 +770,12 @@ export async function POST(request: Request): Promise<Response> {
   const escalationResult = outcome.escalation.draft ?? outcome.escalation.summary;
   const escalationId =
     shadowMode || createsManagerQueue()
-      ? await recordManagerQueue(pool, {
+      ? await recordManagerQueueSafely(pool, {
           tenantId,
           conversationId,
-          channel: "web",
           reason: outcome.escalation.reason,
           summary: outcome.escalation.summary,
-          result: escalationResult,
           draft: outcome.escalation.draft,
-          sources: [],
-          traceRef: conversationId,
-          // Причина исходной эскалации не переписывается, но признак тени
-          // ставится: менеджер должен видеть, что запись пришла из режима тени,
-          // а не из обычной эскалации.
           isShadow: shadowMode,
         })
       : null;
@@ -429,10 +786,31 @@ export async function POST(request: Request): Promise<Response> {
   if (shadowMode) {
     // В режиме тени клиенту не отправляется ничего, включая уведомление об
     // эскалации: ответ в переписку не попадает.
+    await writeTurn(pool, {
+      tenantId,
+      conversationId,
+      clientMessageId: messageKey,
+      clientTextMasked: masked.maskedText,
+      reply: {
+        messageId: replyMessageId,
+        role: "manager",
+        textMasked: "",
+        sources: [
+          {
+            kind: "escalation",
+            id: escalationId ?? outcome.escalation.id,
+            reason: outcome.escalation.reason,
+            summary: outcome.escalation.summary,
+            draft: outcome.escalation.draft,
+          } satisfies EscalationDescriptor,
+        ],
+      },
+    });
+
     return Response.json(
       {
         conversation_id: conversationId,
-        message_id: body.message.client_message_id,
+        message_id: replyMessageId,
         outcome: "escalate",
         answer: null,
         escalation: {
@@ -447,22 +825,31 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const agentMessage = await pool.query<{ id: string }>(
-    `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-     VALUES ($1, $2, $3, 'agent', $4, $4, '[]'::jsonb)
-     RETURNING id`,
-    [
-      tenantId,
-      conversationId,
-      randomUUID(),
-      outcome.escalation.draft ?? outcome.escalation.summary,
-    ],
-  );
+  await writeTurn(pool, {
+    tenantId,
+    conversationId,
+    clientMessageId: messageKey,
+    clientTextMasked: masked.maskedText,
+    reply: {
+      messageId: replyMessageId,
+      role: "manager",
+      textMasked: escalationResult,
+      sources: [
+        {
+          kind: "escalation",
+          id: escalationId ?? outcome.escalation.id,
+          reason: outcome.escalation.reason,
+          summary: outcome.escalation.summary,
+          draft: outcome.escalation.draft,
+        } satisfies EscalationDescriptor,
+      ],
+    },
+  });
 
   return Response.json(
     {
       conversation_id: conversationId,
-      message_id: agentMessage.rows[0]?.id ?? body.message.client_message_id,
+      message_id: replyMessageId,
       outcome: "escalate",
       answer: null,
       escalation: {
@@ -477,76 +864,23 @@ export async function POST(request: Request): Promise<Response> {
   );
 }
 
-/** Таблица соответствий меток диалога: хранится только на сервере. */
-async function loadMaskScope(
+/**
+ * Диалоги, в которых ищется повтор хода.
+ *
+ * С подписанной cookie диалог известен точно. Без неё значение из тела
+ * запроса используется только для сверки: им отбираются диалоги, созданные
+ * клиентом с таким значением, — продолжать их без cookie нельзя.
+ */
+async function conversationScope(
   pool: Pool,
   tenantId: string,
-  conversationId: string,
-): Promise<{ mapping: Record<string, string> }> {
-  const result = await pool.query<{ text_masked: string }>(
-    "SELECT text_masked FROM messages WHERE tenant_id = $1 AND conversation_id = $2",
-    [tenantId, conversationId],
+  clientRef: string,
+  signed: boolean,
+): Promise<string[]> {
+  if (signed) return [clientRef];
+  const result = await pool.query<{ id: string }>(
+    "SELECT id FROM conversations WHERE tenant_id = $1 AND client_ref = $2",
+    [tenantId, clientRef],
   );
-  const mapping: Record<string, string> = {};
-  for (const row of result.rows) {
-    for (const match of row.text_masked.matchAll(/⟦([A-Z]+_\d+)⟧/g)) {
-      const label = `⟦${match[1]}⟧`;
-      if (!(label in mapping)) mapping[label] = label;
-    }
-  }
-  return { mapping };
-}
-
-/**
- * Сохраняет соответствия меток диалога.
- *
- * Исходные значения меток лежат только здесь: в таблицу соответствий
- * диалога, отдельно от текстов сообщений. В модель и трассу они не
- * попадают.
- */
-async function saveMaskScope(
-  pool: Pool,
-  conversationId: string,
-  mapping: Record<string, string>,
-): Promise<void> {
-  for (const [label, value] of Object.entries(mapping)) {
-    // Метка без значения — это метка из маскированного текста, исходного
-    // значения за ней нет: такие метки нечего сохранять.
-    if (value === label) continue;
-    await pool.query(
-      `INSERT INTO conversation_mask (conversation_id, label, value)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (conversation_id, label) DO NOTHING`,
-      [conversationId, label, value],
-    );
-  }
-}
-
-/**
- * Создание диалога, если его ещё нет.
- *
- * Идентификатор диалога приходит из тела запроса, поэтому перед
- * использованием проверяется принадлежность арендатору: чужой диалог
- * использовать нельзя (docs/data-model.md §5, R15). Возвращается `false`,
- * если диалог принадлежит другому арендатору.
- */
-async function claimConversation(
-  pool: Pool,
-  tenantId: string,
-  conversationId: string,
-): Promise<boolean> {
-  const existing = await pool.query<{ tenant_id: string }>(
-    "SELECT tenant_id FROM conversations WHERE id = $1",
-    [conversationId],
-  );
-  const found = existing.rows[0];
-  if (found) return found.tenant_id === tenantId;
-
-  await pool.query(
-    `INSERT INTO conversations (id, tenant_id, channel, status)
-     VALUES ($1, $2, 'web', 'open')
-     ON CONFLICT (id) DO NOTHING`,
-    [conversationId, tenantId],
-  );
-  return true;
+  return result.rows.map((row) => row.id);
 }
