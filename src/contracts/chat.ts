@@ -9,7 +9,14 @@ import { z } from "zod";
 
 /** Источник, на который опирается ответ. */
 export type Source = {
-  kind: "kb_article" | "kb_document";
+  /**
+   * Тип источника.
+   *
+   * `catalog_product` — позиция каталога (снимок фида): у неё идентификатор
+   * `offer_id`, а не uuid, поэтому она не проходит проверку схемы ответа
+   * клиенту как источник БЗ.
+   */
+  kind: "kb_article" | "kb_document" | "catalog_product";
   id: string;
   title: string;
   location: string | null;

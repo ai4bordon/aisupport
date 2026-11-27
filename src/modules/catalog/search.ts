@@ -181,12 +181,40 @@ export async function search(query: string, filters: CatalogFilters = {}): Promi
   const parameters: unknown[] = [tenantId, ...values];
   const conditions: string[] = [`p.tenant_id = $1`];
 
+  // Слова запроса и условие совпадения по каждому из них.
+  //
+  // Полнотекстовое условие собирается как «слово ИЛИ префикс»: `plainto_tsquery`
+  // требует все слова сразу, и запрос «MDaemon Standard» не нашёл бы «MDaemon»,
+  // в названии которого слова «Standard» нет. Порядок результатов задаёт
+  // число совпавших слов — иначе поиск по «MDaemon» возвращал «SmartDraw»,
+  // где слова запроса встречались в описании, а не в названии.
+  const words =
+    trimmed === ""
+      ? []
+      : trimmed
+          .split(/[^\p{L}\p{N}]+/u)
+          .filter((word) => word.length > 1)
+          .slice(0, 8);
+
+  const wordIndexes: number[] = [];
   if (trimmed !== "") {
-    parameters.push(trimmed);
     const queryIndex = nextIndex + 1;
-    // Точное совпадение `offer_id` и полнотекстовый поиск по названию.
+    parameters.push(trimmed);
+    wordIndexes.push(queryIndex);
+    for (const word of words) {
+      parameters.push(word);
+      wordIndexes.push(parameters.length);
+    }
+    const wordClauses = wordIndexes
+      .slice(1)
+      .map(
+        (wordIndex) =>
+          `to_tsvector('russian', p.name) @@ to_tsquery('russian', $${wordIndex} || ':*')`,
+      );
     conditions.push(
-      `(p.offer_id = $${queryIndex} OR to_tsvector('russian', p.name) @@ plainto_tsquery('russian', $${queryIndex}))`,
+      words.length === 0
+        ? `p.offer_id = $${queryIndex}`
+        : `(p.offer_id = $${queryIndex} OR ${wordClauses.join(" OR ")})`,
     );
   }
 
@@ -195,6 +223,30 @@ export async function search(query: string, filters: CatalogFilters = {}): Promi
   const limitIndex = parameters.length + 1;
   parameters.push(limit);
 
+  // Ранжирование: число совпавших слов — по убыванию; затем первое слово
+  // запроса — обычно это маркер бренда, и позиция с ним релевантнее, даже
+  // если совпало столько же слов; затем позиции с подтверждённой ценой;
+  // затем по идентификатору для устойчивого порядка.
+  const matchCount =
+    wordIndexes.length > 1
+      ? wordIndexes
+          .slice(1)
+          .map(
+            (wordIndex) =>
+              `(CASE WHEN to_tsvector('russian', p.name) @@ to_tsquery('russian', $${wordIndex} || ':*') THEN 1 ELSE 0 END)`,
+          )
+          .join(" + ")
+      : "0";
+  const firstWordIndex = wordIndexes[1];
+  const brandClause =
+    firstWordIndex === undefined
+      ? "0"
+      : `(CASE WHEN lower(p.name) LIKE '%' || lower($${firstWordIndex}) || '%' THEN 0 ELSE 1 END)`;
+  const orderBy =
+    wordIndexes.length > 1
+      ? `ORDER BY (${matchCount}) DESC, ${brandClause}, (CASE WHEN p.price > 0 THEN 0 ELSE 1 END), p.offer_id`
+      : "ORDER BY (CASE WHEN p.price > 0 THEN 0 ELSE 1 END), p.offer_id";
+
   const sql = `
     SELECT ${HIT_COLUMNS}
     FROM products p
@@ -202,7 +254,7 @@ export async function search(query: string, filters: CatalogFilters = {}): Promi
     LEFT JOIN catalog_categories c
       ON c.tenant_id = p.tenant_id AND c.category_id = p.category_id
     WHERE ${conditions.join(" AND ")}
-    ORDER BY p.offer_id
+    ${orderBy}
     LIMIT $${limitIndex}
   `;
 
