@@ -20,7 +20,7 @@ import {
   type RequirementSlots,
 } from "@/core/catalog-lookup";
 import { loadSlots, saveSlots } from "@/core/slots";
-import { stripUrls } from "@/core/no-urls";
+import { stripSourceMarkers, stripUrls } from "@/core/no-urls";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
 import { validateAnswer, validatePromise } from "@/core/validate";
 import {
@@ -1201,9 +1201,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
 
   return {
     outcome: "respond",
-    // Ссылки в текст ответа не попадают: они остаются в `sources`, в трассе
-    // и в кабинете менеджера.
-    answer: { text: stripUrls(outgoingText), sources },
+    // Ссылки и служебные маркеры источников в текст ответа не попадают:
+    // они остаются в `sources`, в трассе и в кабинете менеджера.
+    answer: { text: stripSourceMarkers(stripUrls(outgoingText)), sources },
     escalation: null,
     steps,
   };

@@ -128,18 +128,31 @@ export function classifierPrompt(context: string | null): string {
  * уточняющий вопрос продолжает тот же класс. Без этого классификатор
  * трактовал «бюджета нет, инфраструктура своя» как `out_of_scope`, и запрос
  * уходил в базу знаний вместо каталога.
+ *
+ * Подбор идёт по двум признакам: клиент назвал продукт (`productQuery`)
+ * или описал задачу, и тогда определена предметная область (`domain`).
+ * Признак `discovery` — отдельный случай «не знаю, что нужно», но подбор
+ * по задаче начинается и без него: «Защитить почту на 50 сотрудников» —
+ * это подбор, а не пустой слот.
  */
 export function classifierContext(slots: {
   discovery: string | null;
   productQuery: string | null;
+  domain: string | null;
   quantity: number | null;
 } | null): string | null {
   if (slots === null) return null;
-  if (slots.discovery === null && slots.productQuery === null) return null;
-  if (slots.discovery !== null) {
-    return `идёт подбор продукта по задаче, собрано: количество ${slots.quantity ?? "не выяснено"}`;
+  if (slots.discovery === null && slots.productQuery === null && slots.domain === null) {
+    return null;
   }
-  return `идёт подбор продукта ${slots.productQuery}`;
+  if (slots.productQuery !== null) {
+    return `идёт подбор продукта ${slots.productQuery}`;
+  }
+  const subject =
+    slots.discovery !== null
+      ? `по задаче «${slots.discovery}»`
+      : "по предметной области";
+  return `идёт подбор продукта ${subject}, собрано: количество ${slots.quantity ?? "не выяснено"}`;
 }
 
 /**

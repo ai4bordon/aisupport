@@ -33,6 +33,17 @@ import { validateOutgoingText } from "@/core/validate";
 const APPROVAL_REQUIRED_MESSAGE =
   "Ответ не прошёл проверку и не отправлен клиенту";
 
+/**
+ * Фраза клиенту при эскалации.
+ *
+ * Одна фраза без причин и подробностей: клиенту не нужны ни проценты
+ * полномочий агента, ни внутренние правила, ни формулировка причины.
+ * Настоящая причина остаётся в очереди менеджера и в трассе — там, где она
+ * и нужна (решение владельца от 27.11.2026).
+ */
+const ESCALATION_NOTICE =
+  "Я передал ваш вопрос менеджеру, он ответит вам в ближайшее время.";
+
 /** Причина сбоя хода, не прошедшего ядро. */
 const INTERNAL_ERROR_REASON = "internal_error";
 
@@ -788,7 +799,6 @@ export async function POST(request: Request): Promise<Response> {
   // клиента, а не перекладывается менеджеру (ADR-0014). Режим тени запись
   // создаёт всегда: результат, который не отправлен клиенту, должен быть
   // виден менеджеру.
-  const escalationResult = outcome.escalation.draft ?? outcome.escalation.summary;
   const escalationId =
     shadowMode || createsManagerQueue()
       ? await recordManagerQueueSafely(pool, {
@@ -804,6 +814,12 @@ export async function POST(request: Request): Promise<Response> {
   const tokens = outcome.steps.reduce((sum, step) => sum + step.tokensIn + step.tokensOut, 0);
   const cost = outcome.steps.reduce((sum, step) => sum + step.costRub, 0);
 
+  // Клиенту при эскалации уходит одна фраза без причин и подробностей:
+  // «передаём менеджеру» — внутренняя кухня, а «скидка 10% выше полномочий
+  // (до 5%)» — деталь, клиенту не нужная. Настоящая причина остаётся в
+  // очереди менеджера и в трассе (решение владельца от 27.11.2026).
+  const clientEscalationText = ESCALATION_NOTICE;
+
   const messageId = await writeTurn({
     tenantId,
     conversationId,
@@ -812,7 +828,7 @@ export async function POST(request: Request): Promise<Response> {
     reply: {
       messageId: replyMessageId,
       role: "system",
-      textMasked: shadowMode ? "" : escalationResult,
+      textMasked: shadowMode ? "" : clientEscalationText,
       sources: [
         {
           kind: "escalation",
@@ -834,7 +850,9 @@ export async function POST(request: Request): Promise<Response> {
       escalation: {
         id: escalationId ?? outcome.escalation.id,
         reason: outcome.escalation.reason,
-        summary: outcome.escalation.summary,
+        // Клиентскому интерфейсу показывается короткая фраза; полная причина
+        // остаётся в очереди менеджера и в трассе.
+        summary: clientEscalationText,
         draft: outcome.escalation.draft,
       },
       trace: { steps: outcome.steps.length, tokens, cost_rub: cost },
