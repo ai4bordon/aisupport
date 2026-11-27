@@ -99,6 +99,15 @@ describe("текст ответа клиенту без внутренних т�
 
     expect(cleaned).not.toMatch(/источник/i);
   });
+
+  it("фраза про переданные материалы вычищается", () => {
+    const cleaned = stripSourceMarkers(
+      "Точного ответа у меня пока нет: как активировать лицензию, в переданных материалах не описано.",
+    );
+
+    expect(cleaned).not.toMatch(/материал/i);
+    expect(cleaned).not.toMatch(/данных/i);
+  });
 });
 
 describe("системный промпт", () => {
