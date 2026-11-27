@@ -312,7 +312,7 @@ describe("POST /v1/chat", () => {
   it("второй запрос с тем же conversation_id продолжает сбор слотов", async () => {
     // AC 5 тикета 14: собранные слоты переживают отдельные сообщения в одном
     // диалоге. Первый ответ задаёт вопрос о количестве, второй запрос с
-    // ответом на вопрос закрывает слот и даёт карточку с ценой.
+    // ответом на вопрос закрывает слот и переходит к следующему вопросу.
     const conversationId = "1a2b3c4d-2222-4222-8222-222222222222";
     // Класс `product_known` ведёт на маршрут каталога: подбор по названию
     // с уточняющими вопросами по слотам.
@@ -335,6 +335,8 @@ describe("POST /v1/chat", () => {
 
     expect(firstBody.outcome).toBe("respond");
     expect(firstBody.answer?.text).toContain("?");
+    // На уточняющем шаге перечня позиций нет: только вопрос.
+    expect(firstBody.answer?.text).not.toContain("Похожие позиции");
 
     const second = await POST(
       chatRequest(
@@ -355,9 +357,9 @@ describe("POST /v1/chat", () => {
 
     expect(secondBody.outcome).toBe("respond");
     // Слот количества закрыт: агент больше не спрашивает о количестве и
-    // показывает позицию с ценой из снимка фида.
+    // задаёт следующий вопрос по порядку.
     expect(secondBody.answer?.text).not.toContain("Сколько лицензий");
-    expect(secondBody.answer?.text).toMatch(/₽/);
+    expect(secondBody.answer?.text).toContain("?");
     expect(secondBody.answer?.sources.some((source) => source.kind === "catalog_product")).toBe(
       true,
     );

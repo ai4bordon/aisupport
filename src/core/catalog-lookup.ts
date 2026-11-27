@@ -104,11 +104,89 @@ export const SLOT_QUESTIONS: Record<keyof RequirementSlots, string> = {
   domain: "В какой области нужна помощь?",
 };
 
+/**
+ * Разбирает наименование фида на название, редакцию и количество.
+ *
+ * В фиде наименование склеивает всё сразу: «MDaemon Technologies, Ltd.
+ * MDaemon Security Gateway for Email Servers (лицензия с подпиской на
+ * обновления на 1 год), 50». Название без вендора и редакции отдельно
+ * выглядит как «Ltd. Netwin SurgeMail» или «Веб Dr.Web».
+ */
+type ParsedName = {
+  name: string;
+  edition: string | null;
+  quantityText: string | null;
+};
+
+/**
+ * Разбирает наименование позиции.
+ *
+ * Вендор отделяется по полному названию производителя, редакция — по
+ * содержимому в скобках и по обороту «на N год», количество — по хвосту
+ * с числом.
+ */
+export function parseProductName(rawName: string, vendor: string | null): ParsedName {
+  let name = rawName.trim();
+
+  // Вендор в начале наименования.
+  if (vendor !== null) {
+    const escaped = vendor.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    name = name.replace(new RegExp(`^${escaped}\\s*`, "iu"), "").trim();
+  }
+
+  // Редакция в скобках: «(лицензия с подпиской на обновления на 1 год)».
+  let edition: string | null = null;
+  const bracket = name.match(/\(([^)]*)\)/u);
+  if (bracket?.[1] !== undefined) {
+    edition = bracket[1].trim();
+    name = name.replace(bracket[0], " ").trim();
+  }
+
+  // Количество в хвосте: «…, 50» или «… на 50 ПК».
+  let quantityText: string | null = null;
+  const tail = name.match(/,\s*(\d+)\s*$/u);
+  if (tail?.[1] !== undefined) {
+    quantityText = tail[1];
+    name = name.replace(tail[0], "").trim();
+  } else {
+    const inline = name.match(/\s+на\s+(\d+)\s+(?:ПК|пк|пользовател\w*|мест\w*|устройств\w*)\s*$/u);
+    if (inline?.[1] !== undefined) {
+      quantityText = inline[1];
+      name = name.replace(inline[0], "").trim();
+    }
+  }
+
+  // Оборот «на 1 год» без скобок — тоже редакция.
+  if (edition === null) {
+    const term = name.match(/\s+(на\s+\d+\s+(?:год|лет|месяц\w*)\s*(?:с\s+подпиской\s+на\s+обновления\s+на\s+\d+\s+\w+)?)\s*$/iu);
+    if (term?.[1] !== undefined) {
+      edition = term[1].trim();
+      name = name.replace(term[0], "").trim();
+    }
+  }
+
+  return { name: name.replace(/\s{2,}/gu, " ").trim(), edition, quantityText };
+}
+
 /** Найденная позиция каталога вместе с данными для ответа. */
 export type CatalogMatch = {
   offerId: string;
+  /**
+   * Название позиции без вендора и без редакции.
+   *
+   * В фиде всё склеено в одном наименовании («MDaemon Technologies, Ltd.
+   * MDaemon Security Gateway …, 50»), и в ответе это читалось как «Ltd.
+   * Netwin SurgeMail» или «Веб Dr.Web». Вендор и редакция вынесены в
+   * отдельные поля.
+   */
   name: string;
+  /** Производитель: отдельное поле, в название не вклеивается. */
   vendor: string | null;
+  /**
+   * Редакция и условия поставки: «на 1 год», «с подпиской на обновления»,
+   * «продление».
+   */
+  edition: string | null;
   price: number;
   currency: string;
   available: boolean;
@@ -138,6 +216,8 @@ export type CatalogLookup = {
   missingSlots: Array<keyof RequirementSlots>;
   /** Предметная область задачи, определённая по запросу. */
   domain: CatalogDomain;
+  /** Вендор, определённый по запросу или взятый из сохранённого слота. */
+  vendor: string | null;
 };
 
 /**
@@ -518,7 +598,11 @@ export async function lookupCatalog(
     ? slots.productQuery
     : slots.productQuery ?? extractProductQuery(text);
   const vendors = await listVendors(options.tenantId);
-  const vendor = extractVendor(text, vendors);
+  // Вендор берётся из текста, а при его отсутствии — из сохранённого слота:
+  // ответ на уточняющий вопрос («на 12 месяцев») вендора не содержит, и без
+  // сохранённого вендора в выдачу подмешивались позиции других производителей
+  // с похожим словом в названии.
+  const vendor = extractVendor(text, vendors) ?? slots.vendor;
   const mergedSlots: RequirementSlots = { ...slots, vendor, productQuery };
   // Домен берётся из сохранённого слота: ответ на уточняющий вопрос уже не
   // содержит признаков домена.
@@ -551,6 +635,7 @@ export async function lookupCatalog(
       productQuery: null,
       missingSlots: missingSlots(mergedSlots, "discovery"),
       domain,
+      vendor,
     };
   }
 
@@ -653,10 +738,11 @@ export async function lookupCatalog(
       productQuery,
       missingSlots: filtered,
       domain,
+      vendor,
     };
   }
 
-  return { matches, productQuery, missingSlots: missing, domain };
+  return { matches, productQuery, missingSlots: missing, domain, vendor };
 }
 
 /**
@@ -842,10 +928,12 @@ export function missingSlots(
 
 /** Позиция каталога в виде, пригодном для ответа. */
 function toMatch(item: CatalogItem): CatalogMatch {
+  const parsed = parseProductName(item.name, item.vendor);
   return {
     offerId: item.offerId,
-    name: item.name,
+    name: parsed.name,
     vendor: item.vendor,
+    edition: parsed.edition,
     price: item.price,
     currency: item.currencyId,
     available: item.available,
@@ -905,30 +993,6 @@ export function formatPrice(price: number, currency: string): string {
 }
 
 /**
- * Название позиции без вклеенного количества и без вендора в начале.
- *
- * В фиде количество лицензий входит в наименование («… Security Gateway …, 50
- * пользователей»), а вендор стоит первым словом («Доктор Веб Dr.Web …»).
- * Количество показывается отдельным полем, вендор — тоже, поэтому из
- * названия убираются оба: иначе «Доктор Веб Dr.Web … — Доктор Веб»
- * читается как сбой.
- */
-export function cleanProductName(name: string, vendor: string | null = null): string {
-  let cleaned = name.replace(
-    /,\s*\d+\s*(?:пользовател[\p{L}\p{N}]*|пк|шт[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|лицензи[\p{L}\p{N}]*)?\s*$/iu,
-    "",
-  );
-  if (vendor !== null) {
-    // Убирается только полное название вендора в начале: у MDaemon это
-    // «MDaemon Technologies, Ltd.», а у Dr.Web — «Доктор Веб». Первое слово
-    // не трогается: у MDaemon оно часть названия продукта.
-    const escaped = vendor.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    cleaned = cleaned.replace(new RegExp(`^${escaped}\\s+`, "iu"), "");
-  }
-  return cleaned.trim();
-}
-
-/**
  * Количество лицензий позиции — для показа отдельным полем.
  *
  * В названии фида количество вклеено в наименование («…, 50»), и в ответе
@@ -940,21 +1004,29 @@ export function licensedCountText(match: CatalogMatch): string | null {
 }
 
 /**
+ * Строка позиции для ответа: название, вендор, редакция, количество, цена.
+ *
+ * Поля разнесены по местам, а не склеены в одну строку: на демо «Ltd.
+ * Netwin SurgeMail» и «Веб Dr.Web» читались как обрывки названия.
+ */
+export function catalogLine(match: CatalogMatch): string {
+  const parts: string[] = [match.name];
+  if (match.vendor !== null) parts.push(match.vendor);
+  if (match.edition !== null) parts.push(match.edition);
+  const count = licensedCountText(match);
+  if (count !== null) parts.push(count);
+  parts.push(formatPrice(match.price, match.currency));
+  return parts.join(", ");
+}
+
+/**
  * Краткий перечень позиций — для сопровождения уточняющего вопроса.
  *
  * Показываются только те позиции, по которым клиент уже может сориентироваться:
  * название и цена из снимка фида.
  */
 export function catalogSummary(matches: CatalogMatch[]): string {
-  const lines = matches.slice(0, 3).map((match) => {
-    const count = licensedCountText(match);
-    // Вендор в перечне нужен: в названии он убран, а иначе клиент не видит,
-    // кто производитель. Позиции разных вендоров иначе неразличимы.
-    const vendor = match.vendor === null ? "" : `${match.vendor}, `;
-    return `— ${vendor}${cleanProductName(match.name, match.vendor)}: ${formatPrice(match.price, match.currency)}${
-      count === null ? "" : ` (${count})`
-    }`;
-  });
+  const lines = matches.slice(0, 3).map((match) => `— ${catalogLine(match)}`);
   if (lines.length === 0) return "";
   return `Похожие позиции в фиде:\n${lines.join("\n")}`;
 }
@@ -986,17 +1058,7 @@ export function catalogAnswer(
   );
   lines.push("");
   chosen.forEach((match, index) => {
-    const count = licensedCountText(match);
-    const details: string[] = [];
-    if (match.vendor !== null) details.push(match.vendor);
-    if (count !== null) details.push(count);
-    details.push(formatPrice(match.price, match.currency));
-    // Вендор в начале названия фида дублируется отдельным полем, поэтому из
-    // названия он убирается: «Доктор Веб Dr.Web … — Доктор Веб» читается
-    // как сбой.
-    lines.push(
-      `${index + 1}. ${cleanProductName(match.name, match.vendor)} — ${details.join(", ")}`,
-    );
+    lines.push(`${index + 1}. ${catalogLine(match)}`);
   });
   lines.push("");
   lines.push("Цены и наличие взяты из снимка фида, а не подтверждены в реальном времени.");

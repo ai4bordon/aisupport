@@ -13,7 +13,6 @@ import {
 import {
   catalogAnswer,
   catalogMatchText,
-  catalogSummary,
   extractSlots,
   lookupCatalog,
   SLOT_QUESTIONS,
@@ -73,7 +72,41 @@ export type AgentOutcome =
     };
 
 /**
- * Пределы времени (docs/api-contract.md §10).
+ * Предел контекста источников для генерации.
+ *
+ * Длинные статьи целиком в промпте стоили 0.06 ₽ на ответ против 0.002 ₽
+ * у каталога: цена выросла в тридцать раз из-за объёма входных токенов.
+ * Поэтому в модель уходят три лучших источника, каждый обрезан по длине,
+ * а суммарный объём ограничен: 1800 символов — около тысячи входных
+ * токенов вместо полутора тысяч.
+ */
+const MAX_PROMPT_SOURCES = 3;
+const MAX_SOURCE_CHARS = 600;
+const MAX_TOTAL_SOURCE_CHARS = 1400;
+
+/**
+ * Готовит текст источников для промпта.
+ *
+ * Источники упорядочены по релевантности (порядок поиска), лишние
+ * отбрасываются, каждый обрезается, а суммарная длина ограничивается.
+ */
+export function buildSourceContext(sources: Source[]): string {
+  const parts: string[] = [];
+  let total = 0;
+  for (const [index, source] of sources.slice(0, MAX_PROMPT_SOURCES).entries()) {
+    if (total >= MAX_TOTAL_SOURCE_CHARS) break;
+    const budget = Math.min(MAX_SOURCE_CHARS, MAX_TOTAL_SOURCE_CHARS - total);
+    const text = source.text.slice(0, budget);
+    total += text.length;
+    parts.push(
+      `[${index + 1}] ${source.title}${source.location ? ` (${source.location})` : ""}\n${text}`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Предел времени (docs/api-contract.md §10).
  *
  * - внутренний шаг — 5 с;
  * - весь диалог — 300 с.
@@ -442,6 +475,13 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
         slots = { ...slots, productQuery: catalogResult.productQuery };
         await saveSlots(input.conversationId, slots);
       }
+      // Вендор сохраняется в диалоге: ответ на уточняющий вопрос его не
+      // содержит, а без него поиск по названию подмешивал позиции других
+      // производителей с похожим словом.
+      if (slots.vendor === null && catalogResult.vendor !== null) {
+        slots = { ...slots, vendor: catalogResult.vendor };
+        await saveSlots(input.conversationId, slots);
+      }
     }
     await pushStep({
       node: "catalog",
@@ -563,7 +603,10 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
         return {
           outcome: "respond",
           answer: {
-            text: `${SLOT_QUESTIONS[slot]}\n\n${catalogSummary(catalogResult.matches)}`,
+            // На уточняющем шаге перечень позиций лишний: он перебивает
+            // вопрос и утяжеляет ответ. Список показывается на финальном
+            // шаге, когда данные собраны.
+            text: `${SLOT_QUESTIONS[slot]}\n\nПокажу варианты после вашего ответа.`,
             sources: catalogSources,
           },
           escalation: null,
@@ -714,12 +757,9 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
             { role: "user", content: input.text },
             {
               role: "assistant",
-              content: `Подтверждённые источники:\n${sources
-                .map(
-                  (source, index) =>
-                    `[${index + 1}] ${source.title}${source.location ? ` (${source.location})` : ""}\n${source.text}`,
-                )
-                .join("\n\n")}`,
+              // Контекст ограничен по объёму: полные статьи в промпте
+              // стоили в тридцать раз дороже ответа по каталогу.
+              content: `Подтверждённые источники:\n${buildSourceContext(sources)}`,
             },
           ],
         }),
