@@ -154,6 +154,12 @@ export async function resetTenant(slug: string): Promise<string> {
   await ensureSchema();
   const pool = getPool();
 
+  // Арендатор должен совпадать с тем, который вернёт getTenantId(): переменная
+  // окружения живёт на уровне процесса, а воркер Vitest переиспользуется между
+  // тестовыми файлами. Без этой строки файл наследует slug предыдущего и
+  // пишет счётчики и данные в чужого арендатора.
+  process.env.TENANT_SLUG = slug;
+
   const existing = await pool.query<{ id: string }>(
     "SELECT id FROM tenants WHERE slug = $1",
     [slug],

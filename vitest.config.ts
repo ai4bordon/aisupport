@@ -20,6 +20,10 @@ export default defineConfig({
     // задаётся top-level maxWorkers.
     pool: "forks",
     maxWorkers: 2,
+    // Файлы тестов идут последовательно: счётчики лимитов и миграции живут
+    // в общей базе, и параллельный прогон давал гонки — падали разные тесты
+    // от прогона к прогону. Последовательный прогон детерминирован.
+    fileParallelism: false,
     testTimeout: 20000,
     hookTimeout: 20000,
   },

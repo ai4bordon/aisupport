@@ -19,6 +19,11 @@ export type ModelRequest = {
   messages: ModelMessage[];
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Идентификатор диалога: из него получается заголовок `x-opencode-session`,
+   * который OpenCode Go требует для чат-эндпоинта.
+   */
+  sessionId?: string;
 };
 
 export type ModelResult = {
@@ -66,6 +71,15 @@ type ClientOptions = {
   fetchImpl?: FetchLike;
   /** Пауза перед повтором: по умолчанию 30 с, в тестах — мгновенно. */
   sleep?: (milliseconds: number) => Promise<void>;
+  /**
+   * Идентификатор сессии для заголовка `x-opencode-session`.
+   *
+   * OpenCode Go требует этот заголовок: без него чат-эндпоинт отвечает
+   * 400 «Request is missing x-opencode-session». Значение берётся из
+   * идентификатора диалога, поэтому маршрутизация и кэш промптов
+   * привязаны к диалогу.
+   */
+  sessionId?: string;
 };
 
 /**
@@ -78,6 +92,35 @@ function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
+}
+
+/**
+ * Понятное объяснение отказа провайдера.
+ *
+ * У OpenCode Go две типовые причины, и обе требуют действия владельца,
+ * а не повтора: модель вне регионов Europe/United States (нужно включить
+ * Global в Console → Settings → Privacy) и модель, не входящая в Go.
+ * Без разбора сообщение об ошибке остаётся непонятным пользователю.
+ */
+async function describeProviderFailure(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  const detail = body.slice(0, 400);
+  if (response.status === 400 && /region|country|Global/i.test(body)) {
+    return `Провайдер модели вернул 400: модель недоступна для текущего региона. Нужно включить Global в Console → Settings → Privacy. ${detail}`;
+  }
+  if (response.status === 400 && /x-opencode-session/i.test(body)) {
+    return `Провайдер модели вернул 400: отсутствует заголовок x-opencode-session. ${detail}`;
+  }
+  if (response.status === 400 && /not included|not available in/i.test(body)) {
+    return `Провайдер модели вернул 400: модель не входит в подписку Go. ${detail}`;
+  }
+  if (response.status === 402) {
+    return `Провайдер модели вернул 402: недостаточно средств на счёте. ${detail}`;
+  }
+  if (response.status === 403) {
+    return `Провайдер модели вернул 403: эндпоинт недоступен для этой модели. ${detail}`;
+  }
+  return `Провайдер модели вернул ${response.status}. ${detail}`;
 }
 
 /**
@@ -148,12 +191,20 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
       );
 
       const call = async (): Promise<Response> => {
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          authorization: `Bearer ${options.apiKey}`,
+        };
+        // Идентификатор сессии обязателен для Go-эндпоинта чата.
+        const sessionId = request.sessionId ?? options.sessionId;
+        if (sessionId) {
+          headers["x-opencode-session"] = sessionId.startsWith("ses_")
+            ? sessionId
+            : `ses_${sessionId}`;
+        }
         const response = await fetchImpl(`${options.baseUrl}/chat/completions`, {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${options.apiKey}`,
-          },
+          headers,
           body: JSON.stringify({
             model: options.model,
             messages: request.messages,
@@ -178,7 +229,9 @@ export function createHttpModelClient(options: ClientOptions): ModelClient {
           throw new ModelUnavailableError("Провайдер модели вернул 429 повторно");
         }
         if (!response.ok) {
-          throw new ModelUnavailableError(`Провайдер модели вернул ${response.status}`);
+          throw new ModelUnavailableError(
+            await describeProviderFailure(response),
+          );
         }
 
         const payload = (await response.json()) as unknown;
@@ -233,8 +286,12 @@ export function getModelClient(): ModelClient {
 /** Клиент по умолчанию из переменных окружения. */
 export function createDefaultModelClient(): ModelClient {
   return createHttpModelClient({
-    baseUrl: process.env.OPENCODE_BASE_URL,
+    // Подписка OpenCode Go обслуживается отдельным путём: /inference/go/v1.
+    // Адрес /inference/openai/v1 — это pay-as-you-go по кредитам Console,
+    // и с подпиской Go он всегда отвечает 402 или 429.
+    baseUrl:
+      process.env.OPENCODE_BASE_URL ?? "https://opencode.ai/inference/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
-    model: process.env.LLM_MODEL ?? "deepseek-chat",
+    model: process.env.LLM_MODEL ?? "deepseek-v4.1-flash",
   });
 }

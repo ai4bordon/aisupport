@@ -114,6 +114,64 @@ export function setEmbeddingProvider(provider: EmbeddingProvider): void {
   embeddingProvider = provider;
 }
 
+/**
+ * Живой провайдер эмбеддингов через OpenCode Go.
+ *
+ * Подписка Go обслуживает эмбеддинги отдельным [OI]-совместимым путём
+ * `/inference/go/openai/v1/embeddings`; заголовок сессии здесь не нужен.
+ * Размерность 1536 совпадает с моделью данных, поэтому её не меняем.
+ *
+ * Модели, не входящие в Go, молча не подменяются: при ответе 400 бросается
+ * ошибка с текстом провайдера, чтобы это было видно в эскалации.
+ */
+export function createOpenCodeEmbeddingProvider(
+  options: {
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+    dimensions?: number;
+    fetchImpl?: typeof fetch;
+  } = {},
+): EmbeddingProvider {
+  const baseUrl =
+    options.baseUrl ?? "https://opencode.ai/inference/go/openai/v1";
+  const model = options.model ?? "qwen3-embedding-8b";
+  const dimensions = options.dimensions ?? EMBEDDING_DIMENSIONS;
+  const fetchImpl = options.fetchImpl ?? fetch;
+
+  return {
+    embed: async (text: string): Promise<number[]> => {
+      if (!options.apiKey) {
+        throw new Error("Ключ модели не задан: векторный поиск недоступен");
+      }
+      const response = await fetchImpl(`${baseUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${options.apiKey}`,
+        },
+        body: JSON.stringify({ model, input: [text], dimensions }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(
+          `Провайдер эмбеддингов вернул ${response.status}: ${body.slice(0, 300)}`,
+        );
+      }
+      const payload = (await response.json()) as {
+        data?: Array<{ embedding?: number[] }>;
+      };
+      const vector = payload.data?.[0]?.embedding;
+      if (!vector || vector.length !== dimensions) {
+        throw new Error(
+          `Провайдер эмбеддингов вернул вектор размерности ${vector?.length ?? 0} вместо ${dimensions}`,
+        );
+      }
+      return vector;
+    },
+  };
+}
+
 /** Текст чанка без служебной шапки источника. */
 function bodyFromText(text: string): string {
   const lines = text.split("\n");

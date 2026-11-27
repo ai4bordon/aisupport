@@ -138,6 +138,9 @@ export async function ensureDatabase(tenantSlug: string): Promise<void> {
  */
 export async function resetCounters(): Promise<void> {
   const slug = process.env.TENANT_SLUG;
+  if (!slug) {
+    throw new Error("TENANT_SLUG не задан: тест обязан вызвать ensureDatabase");
+  }
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
   try {

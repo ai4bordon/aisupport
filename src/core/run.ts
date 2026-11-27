@@ -169,6 +169,7 @@ async function classify(
 ): Promise<{ intent: string; tokensIn: number; tokensOut: number; costRub: number; model: string }> {
   const client = getModelClient();
   const result = await client.complete({
+    sessionId: input.conversationId,
     messages: [
       {
         role: "system",
@@ -410,6 +411,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       guard.stepBudget(),
       () =>
         client.complete({
+          sessionId: input.conversationId,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: input.text },
