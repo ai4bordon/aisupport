@@ -244,12 +244,27 @@
 | `mime_type` | text | not null |
 | `size_bytes` | integer | not null, `> 0` |
 | `storage_path` | text | not null |
-| `status` | text | not null; `pending`, `published`, `rejected` |
+| `status` | text | not null; `pending`, `published`, `rejected`, `error` |
 | `chunks_count` | integer | not null, default 0 |
 | `created_at` | timestamptz | not null, default now() |
 | `approved_at` | timestamptz | null |
+| `parse_status` | text | not null; `not_parsed`, `parsed`, `failed` |
+| `parse_error` | text | null |
+| `provenance` | jsonb | not null, default `'{}'` |
+| `source_kind` | text | not null; `manager_upload` |
+| `source_url` | text | null |
+| `snapshot_hash` | text | null |
+| `approved_by` | text | null |
+| `rejected_reason` | text | null |
+| `parsed_at` | timestamptz | null |
+| `failed_at` | timestamptz | null |
+| `retry_count` | integer | not null, default 0 |
+| `last_attempt_at` | timestamptz | null |
+| `extracted_chars` | integer | not null, default 0 |
 
-Индекс: `(tenant_id, status, created_at DESC)`.
+Индексы: `(tenant_id, status, created_at DESC)`, `(tenant_id, parse_status, created_at DESC)`.
+
+`status` отвечает за публикацию, `parse_status` — за разбор: результат разбора отделён от того, одобрен ли материал. `error` означает, что разбор или индексация не удались: материал недоступен поиску, но виден менеджеру и может быть обработан повторно (`retry_count`, `last_attempt_at`). Провенанс загрузки живёт здесь, а не в `kb_sources`: у материала менеджера нет URL источника, а `kb_sources.origin` ограничен `docs_site`/`store_page`.
 
 ### 3.14 `kb_chunks`
 

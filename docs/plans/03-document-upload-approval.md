@@ -64,6 +64,7 @@
   - расширить CHECK статуса `kb_documents` значением `error`: `ALTER TABLE kb_documents DROP CONSTRAINT kb_documents_status_check; ALTER TABLE kb_documents ADD CONSTRAINT kb_documents_status_check CHECK (status IN ('pending','published','rejected','error'));` — состояние `error` означает «разбор или индексация не удались, материал не доступен поиску и может быть повторён»;
   - добавить `parse_status text NOT NULL DEFAULT 'not_parsed' CHECK (parse_status IN ('not_parsed','parsed','failed'))` — результат разбора отдельно от статуса публикации;
   - добавить `parse_error text NULL` — короткое понятное сообщение об ошибке разбора/индексации (без стека и секретов);
+  - добавить `provenance jsonb NOT NULL DEFAULT '{}'::jsonb` — провенанс загрузки: `uploaded_by`, `uploaded_at`, `source` (`manager_upload`), `original_filename`, `mime_detected`;
   - добавить `source_kind text NOT NULL DEFAULT 'manager_upload' CHECK (source_kind IN ('manager_upload'))` — провенанс происхождения: материал менеджера отличается от материала заказчика (`kb_sources.status='approved_by_customer'`);
   - добавить `source_url text NULL`, `snapshot_hash text NULL` — ссылка на материал в кабинете и хеш содержимого: по хешу повторная загрузка того же файла распознаётся, а не плодит дубли;
   - добавить `approved_by text NULL`, `rejected_reason text NULL` — кто и по какой причине решил судьбу документа;
