@@ -151,9 +151,13 @@ describe("POST /v1/chat — исправления по отчёту аудит�
 
   /**
    * B3: без подписанной cookie значение `conversation_id` из тела запроса
-   * диалог не определяет. Чужой диалог по UUID из тела недоступен.
+   * чужой диалог не открывает.
+   *
+   * Чужой диалог не читается и не продолжается: запрос без cookie с чужим
+   * идентификатором получает собственный новый диалог, а переписка чужого
+   * диалога остаётся нетронутой.
    */
-  it("без cookie чужой conversation_id из тела не продолжает чужой диалог", async () => {
+  it("без cookie чужой conversation_id из тела не читает чужой диалог", async () => {
     const foreignConversationId = "1a2b3c4d-1111-4111-8111-111111111111";
     const foreignMessageId = "1a2b3c4d-2222-4222-8222-222222222222";
 
@@ -170,13 +174,15 @@ describe("POST /v1/chat — исправления по отчёту аудит�
     const ownerCookie = (owner.headers.get("set-cookie") ?? "").split(";")[0];
     expect(ownerCookie).toContain("support_conversation=");
 
-    // Запрос без cookie с тем же `conversation_id` и тем же
-    // `client_message_id` не должен вернуть ответ чужого диалога.
+    const ownerAnswer = (await owner.json()) as ChatBody;
+
+    // Запрос без cookie с чужим `conversation_id` и своим идентификатором
+    // сообщения: диалог клиента другой, переписка чужого не читается.
     const response = await POST(
       chatRequest({
         conversation_id: foreignConversationId,
         message: {
-          client_message_id: foreignMessageId,
+          client_message_id: "1a2b3c4d-3333-4333-8333-333333333333",
           text: "Как получить электронную лицензию?",
         },
       }),
@@ -187,13 +193,21 @@ describe("POST /v1/chat — исправления по отчёту аудит�
     // Диалог новый: идентификатор не совпадает с чужим.
     expect(body.conversation_id).not.toBe(foreignConversationId);
 
-    // В чужом диалоге появился ровно один ход клиента — тот, что сделал
-    // его владелец.
+    // В чужом диалоге ровно один ход клиента — тот, что сделал его
+    // владелец. Запрос без cookie чужой диалог не продолжил.
     const foreign = await testPool().query<{ count: string }>(
       "SELECT count(*)::text AS count FROM messages WHERE conversation_id = $1 AND role = 'client'",
       [foreignConversationId],
     );
     expect(Number(foreign.rows[0]?.count ?? "0")).toBe(1);
+
+    // Переписка чужого диалога не вернулась в ответе.
+    const foreignMessages = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM messages WHERE conversation_id = $1",
+      [foreignConversationId],
+    );
+    expect(Number(foreignMessages.rows[0]?.count ?? "0")).toBe(2);
+    expect(body.message_id).not.toBe(ownerAnswer.message_id);
   });
   /**
    * B2: тот же `client_message_id` в другом диалоге не подхватывает ответ

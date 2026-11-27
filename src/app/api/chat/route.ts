@@ -22,10 +22,10 @@ import { validateOutgoingText } from "@/core/validate";
  * Порядок: cookie → сверка conversation_id → идемпотентность → маскирование →
  * ядро → восстановление меток → запись хода в базу → ответ по контракту.
  *
- * Диалог определяется только подписанной cookie: клиент не может задать
- * или подменить `conversation_id` в теле запроса (docs/api-contract.md §4).
- * Без подписанной cookie создаётся новый диалог, и его идентификатор
- * возвращается в ответе — клиент продолжает разговор именно с ним.
+ * Диалог определяется подписанной cookie: клиент не может задать или
+ * подменить `conversation_id` в теле запроса (docs/api-contract.md §4). Без
+ * подписанной cookie клиент получает новый диалог, а значение из тела
+ * используется только для сверки повтора.
  */
 
 /** Текст отказа по проверке ответа. */
@@ -52,12 +52,12 @@ function errorResponse(
  * Ключ хода: идентификатор сообщения по тройке
  * (арендатор, диалог, `client_message_id`).
  *
- * Уникальный индекс `messages (tenant_id, client_message_id)` в схеме общий
- * на весь арендатор, а идемпотентность должна действовать в рамках диалога
- * (docs/api-contract.md §4). Поэтому в колонке лежит не идентификатор
- * сообщения клиента, а выведенный из тройки ключ хода: один и тот же
- * `client_message_id` в двух диалогах даёт два разных ключа, и второе
- * сообщение не теряется молча.
+ * Ключ идемпотентности действует в рамках диалога
+ * (docs/api-contract.md §4), а уникальный индекс `messages (tenant_id,
+ * client_message_id)` в схеме общий на весь арендатор. Поэтому в колонке
+ * лежит не идентификатор сообщения клиента, а выведенный из тройки ключ
+ * хода: один и тот же `client_message_id` в двух диалогах даёт два разных
+ * ключа, и второе сообщение не теряется молча.
  *
  * Значение — UUID версии 5 по SHA-256: колонка объявлена как `uuid`.
  */
@@ -74,21 +74,15 @@ function turnKey(
 }
 
 /**
- * Ключ ответа хода.
+ * Ключ записи ответа хода.
  *
- * Ответ агента связан с исходным сообщением: повтор того же
- * `client_message_id` возвращает ответ именно этого сообщения, а не
- * последний ответ диалога.
+ * Ответ агента — отдельная запись переписки со своим `client_message_id`,
+ * чтобы не совпадать с ключом сообщения клиента. Связь ответа с исходным
+ * сообщением хранится в колонке `reply_to_client_message_id`.
  */
-function replyKey(
-  tenantId: string,
-  conversationId: string,
-  clientMessageId: string,
-): string {
+function replyKey(tenantId: string, turn: string): string {
   return uuidFromDigest(
-    createHash("sha256")
-      .update(`reply:${tenantId}:${conversationId}:${clientMessageId}`)
-      .digest(),
+    createHash("sha256").update(`reply:${tenantId}:${turn}`).digest(),
   );
 }
 
@@ -140,15 +134,22 @@ type TurnResult = {
  *
  * Исходный текст клиента в таблицу не попадает: `text_original` остаётся
  * пустым, исходные значения лежат только в таблице соответствий меток.
+ *
+ * Ответ агента связан с исходным сообщением клиента колонкой
+ * `reply_to_client_message_id`: повтор того же `client_message_id`
+ * возвращает ответ именно этого сообщения, а не последний ответ диалога
+ * (находка B1).
  */
 async function writeTurn(
   pool: Pool,
   turn: {
     tenantId: string;
     conversationId: string;
-    clientMessageId: string;
+    /** Ключ хода: значение колонки `client_message_id` у сообщения клиента. */
+    turnKey: string;
     clientTextMasked: string;
     reply: {
+      /** Ключ записи ответа: значение колонки `client_message_id` у ответа. */
       messageId: string;
       role: "agent" | "system";
       textMasked: string;
@@ -161,19 +162,19 @@ async function writeTurn(
     await client.query("BEGIN");
     try {
       await client.query(
-        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-         VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb)
+        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
+         VALUES ($1, $2, $3, 'client', $4, NULL, '[]'::jsonb, NULL)
          ON CONFLICT (tenant_id, client_message_id) DO NOTHING`,
         [
           turn.tenantId,
           turn.conversationId,
-          turn.clientMessageId,
+          turn.turnKey,
           turn.clientTextMasked,
         ],
       );
       const reply = await client.query<{ id: string }>(
-        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources)
-         VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb)
+        `INSERT INTO messages (tenant_id, conversation_id, client_message_id, role, text_masked, text_original, sources, reply_to_client_message_id)
+         VALUES ($1, $2, $3, $4, $5, NULL, $6::jsonb, $7)
          ON CONFLICT (tenant_id, client_message_id) DO NOTHING
          RETURNING id`,
         [
@@ -183,6 +184,7 @@ async function writeTurn(
           turn.reply.role,
           turn.reply.textMasked,
           JSON.stringify(turn.reply.sources),
+          turn.turnKey,
         ],
       );
       const stored = reply.rows[0];
@@ -194,8 +196,7 @@ async function writeTurn(
       // Ответ хода уже записан: возвращается его идентификатор, чтобы
       // повтор вернул тот же `message_id`.
       const existing = await client.query<{ id: string }>(
-        `SELECT id FROM messages
-          WHERE tenant_id = $1 AND client_message_id = $2`,
+        "SELECT id FROM messages WHERE tenant_id = $1 AND client_message_id = $2",
         [turn.tenantId, turn.reply.messageId],
       );
       await client.query("COMMIT");
@@ -275,7 +276,10 @@ async function claimNewConversation(
  *
  * Ключ идемпотентности — (арендатор, диалог, `client_message_id`): тот же
  * идентификатор в чужом диалоге не подхватывает ответ этого диалога.
- * Возвращается результат именно этого хода.
+ *
+ * Ответ хода находится по связи `reply_to_client_message_id`, а не по
+ * времени записи: повтор возвращает ответ именно того сообщения, которое
+ * клиент повторил (находка B1).
  */
 async function findTurn(
   pool: Pool,
@@ -284,15 +288,16 @@ async function findTurn(
   clientMessageId: string,
   restore: (text: string) => Promise<string>,
 ): Promise<TurnResult | null> {
+  const turn = turnKey(tenantId, conversationId, clientMessageId);
+
   const clientMessage = await pool.query<{ id: string }>(
     `SELECT id FROM messages
       WHERE tenant_id = $1 AND conversation_id = $2
         AND client_message_id = $3 AND role = 'client'`,
-    [tenantId, conversationId, turnKey(tenantId, conversationId, clientMessageId)],
+    [tenantId, conversationId, turn],
   );
   if (!clientMessage.rows[0]) return null;
 
-  const replyMessageId = replyKey(tenantId, conversationId, clientMessageId);
   const reply = await pool.query<{
     id: string;
     role: string;
@@ -301,8 +306,8 @@ async function findTurn(
   }>(
     `SELECT id, role, text_masked, sources FROM messages
       WHERE tenant_id = $1 AND conversation_id = $2
-        AND client_message_id = $3 AND role IN ('agent', 'system')`,
-    [tenantId, conversationId, replyMessageId],
+        AND reply_to_client_message_id = $3 AND role IN ('agent', 'system')`,
+    [tenantId, conversationId, turn],
   );
   const replyRow = reply.rows[0];
   if (!replyRow) return null;
@@ -443,74 +448,81 @@ export async function POST(request: Request): Promise<Response> {
     return restoreMaskedData(text, mapping);
   };
 
-  // Диалог, в котором выполняется ход.
+  // Диалог, в котором ищется ход.
   //
   // С подписанной cookie это диалог cookie: тело только сверялось с ней
-  // выше. Без подписанной cookie существующий диалог не продолжается:
-  // идентификатор из тела может стать идентификатором нового диалога,
-  // но чужой или прежний диалог по нему не открывается.
-  const conversationId = cookieConversation
-    ? cookieConversation.id
-    : await claimNewConversation(pool, tenantId, body.conversation_id);
+  // выше. Без подписанной cookie значение из тела определяет лишь
+  // кандидата: ход с таким ключом ищется в этом диалоге, а новый ход
+  // без найденного повтора получает новый диалог.
+  const candidateId = cookieConversation?.id ?? body.conversation_id;
 
-  const claim = cookieConversation
-    ? await claimConversation(pool, tenantId, conversationId)
-    : { created: true, owned: true };
-  if (!claim.owned) {
-    return errorResponse(
-      403,
-      "forbidden",
-      "Диалог принадлежит другому арендатору",
-      requestId,
+  if (cookieConversation) {
+    const claim = await claimConversation(pool, tenantId, candidateId);
+    if (!claim.owned) {
+      return errorResponse(
+        403,
+        "forbidden",
+        "Диалог принадлежит другому арендатору",
+        requestId,
+      );
+    }
+  }
+
+  // Идемпотентность: повтор client_message_id не создаёт второе обращение.
+  // Повтор распознаётся по ключу хода (арендатор, диалог, сообщение) и
+  // возвращает ответ именно этого сообщения.
+  const repeated = await findTurn(
+    pool,
+    tenantId,
+    candidateId,
+    body.message.client_message_id,
+    (text) => restore(text, candidateId),
+  );
+  if (repeated) {
+    if (repeated.rejected) {
+      return errorResponse(
+        422,
+        "approval_required",
+        APPROVAL_REQUIRED_MESSAGE,
+        requestId,
+      );
+    }
+    if (repeated.escalation?.reason === INTERNAL_ERROR_REASON) {
+      return errorResponse(
+        500,
+        "internal_error",
+        "Ход не обработан: сбой агентного цикла",
+        requestId,
+      );
+    }
+    // Cookie не выдаётся: подписанная cookie — единственное подтверждение
+    // принадлежности диалога, и её нельзя выдать по одному лишь знанию
+    // идентификатора из тела запроса.
+    return Response.json(
+      {
+        conversation_id: candidateId,
+        message_id: repeated.messageId,
+        outcome: repeated.outcome,
+        answer: repeated.answer,
+        escalation: repeated.escalation,
+        trace: { steps: 0, tokens: 0, cost_rub: 0 },
+      },
+      { headers: {} },
     );
   }
+
+  // Диалог, в котором выполняется ход.
+  //
+  // Без подписанной cookie существующий диалог не продолжается: ход с новым
+  // ключом получает новый диалог, и идентификатор из тела может стать его
+  // идентификатором только если он ещё свободен.
+  const conversationId = cookieConversation
+    ? candidateId
+    : await claimNewConversation(pool, tenantId, candidateId);
 
   const headers: Record<string, string> = {};
   if (!cookieConversation) {
     headers["Set-Cookie"] = buildSetCookie(conversationId);
-  }
-
-  // Идемпотентность: повтор client_message_id не создаёт второе обращение.
-  // Повтор распознаётся только в диалоге, подтверждённом cookie: без
-  // подписи диалог не определяется, и чужой диалог по идентификатору из
-  // тела недоступен.
-  if (cookieConversation) {
-    const repeated = await findTurn(
-      pool,
-      tenantId,
-      conversationId,
-      body.message.client_message_id,
-      (text) => restore(text, conversationId),
-    );
-    if (repeated) {
-      if (repeated.rejected) {
-        return errorResponse(
-          422,
-          "approval_required",
-          APPROVAL_REQUIRED_MESSAGE,
-          requestId,
-        );
-      }
-      if (repeated.escalation?.reason === INTERNAL_ERROR_REASON) {
-        return errorResponse(
-          500,
-          "internal_error",
-          "Ход не обработан: сбой агентного цикла",
-          requestId,
-        );
-      }
-      return Response.json(
-        {
-          conversation_id: conversationId,
-          message_id: repeated.messageId,
-          outcome: repeated.outcome,
-          answer: repeated.answer,
-          escalation: repeated.escalation,
-          trace: { steps: 0, tokens: 0, cost_rub: 0 },
-        },
-        { headers },
-      );
-    }
   }
 
   // Маскирование до вызова модели: в модель уходят только метки. Таблица
@@ -522,22 +534,18 @@ export async function POST(request: Request): Promise<Response> {
     await maskStore.save(conversationId, masked.mapping);
   }
 
-  const messageKey = turnKey(
+  const turn = turnKey(
     tenantId,
     conversationId,
     body.message.client_message_id,
   );
-  const replyMessageId = replyKey(
-    tenantId,
-    conversationId,
-    body.message.client_message_id,
-  );
+  const replyMessageId = replyKey(tenantId, turn);
 
   let outcome: AgentOutcome;
   try {
     outcome = await runAgent({
       conversationId,
-      messageId: messageKey,
+      messageId: turn,
       channel: "web",
       externalChatId: null,
       text: masked.maskedText,
@@ -551,7 +559,7 @@ export async function POST(request: Request): Promise<Response> {
     await writeTurn(pool, {
       tenantId,
       conversationId,
-      clientMessageId: messageKey,
+      turnKey: turn,
       clientTextMasked: masked.maskedText,
       reply: {
         messageId: replyMessageId,
@@ -589,7 +597,7 @@ export async function POST(request: Request): Promise<Response> {
     await writeTurn(pool, {
       tenantId,
       conversationId,
-      clientMessageId: messageKey,
+      turnKey: turn,
       clientTextMasked: masked.maskedText,
       reply: {
         messageId: replyMessageId,
@@ -647,7 +655,7 @@ export async function POST(request: Request): Promise<Response> {
       await writeTurn(pool, {
         tenantId,
         conversationId,
-        clientMessageId: messageKey,
+        turnKey: turn,
         clientTextMasked: masked.maskedText,
         reply: {
           messageId: replyMessageId,
@@ -698,7 +706,7 @@ export async function POST(request: Request): Promise<Response> {
       const messageId = await writeTurn(pool, {
         tenantId,
         conversationId,
-        clientMessageId: messageKey,
+        turnKey: turn,
         clientTextMasked: masked.maskedText,
         reply: {
           messageId: replyMessageId,
@@ -739,7 +747,7 @@ export async function POST(request: Request): Promise<Response> {
     const messageId = await writeTurn(pool, {
       tenantId,
       conversationId,
-      clientMessageId: messageKey,
+      turnKey: turn,
       clientTextMasked: masked.maskedText,
       reply: {
         messageId: replyMessageId,
@@ -805,7 +813,7 @@ export async function POST(request: Request): Promise<Response> {
   const messageId = await writeTurn(pool, {
     tenantId,
     conversationId,
-    clientMessageId: messageKey,
+    turnKey: turn,
     clientTextMasked: masked.maskedText,
     reply: {
       messageId: replyMessageId,
