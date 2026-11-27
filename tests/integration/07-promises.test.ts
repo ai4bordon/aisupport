@@ -353,8 +353,10 @@ describe("интеграционная проверка среза 07", () => {
     expect(promises.rows[0]?.owner).toBe("manager");
     expect(promises.rows[0]?.due_at.getTime()).toBeGreaterThan(Date.now());
 
-    // Ответ клиенту содержит обещание с адресом и сроком.
-    expect(body.answer?.text).toContain("Счёт будет отправлен на");
+    // Ответ клиенту содержит обещание с адресом и сроком. Формулировку
+    // обязательства сохраняет модель, а код добавляет адресата и срок
+    // (ADR-0019, C18): раньше текст переписывался шаблоном кода.
+    expect(body.answer?.text).toContain("Пришлю КП");
     expect(body.answer?.text).toContain("client@example.com");
     expect(body.answer?.text).toContain("120");
   });
@@ -379,8 +381,8 @@ describe("интеграционная проверка среза 07", () => {
       answer: { text: string } | null;
     };
     expect(body.outcome).toBe("respond");
-    expect(body.answer?.text).toContain("КП будет готово до");
-    expect(body.answer?.text).toContain("пришлю сюда");
+    expect(body.answer?.text).toContain("Пришлю КП");
+    expect(body.answer?.text).toContain("120");
 
     const promises = await testPool().query<{
       channel: string;

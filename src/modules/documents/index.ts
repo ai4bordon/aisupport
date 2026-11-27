@@ -5,7 +5,7 @@
  * дело модуля.
  */
 
-export { renderQuote } from "./quote";
+export { renderQuote, defaultVatRate } from "./quote";
 export { renderInvoice } from "./invoice";
 export { DocumentError } from "./render";
 
