@@ -26,6 +26,13 @@ import { parsePdf } from "../documents/pdf-inspect";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
+if (!DATABASE_URL) {
+  // Строка подключения задаётся конфигом Vitest (vitest.config.ts), поэтому
+  // проверка выполняется всегда: молча пропущенная проверка выглядела бы как
+  // пройденная (аудит B13).
+  throw new Error("DATABASE_URL не задан: конфиг Vitest обязан его задать");
+}
+
 const quoteInput = (): QuoteInput => ({
   number: "Исх. № бн от 26.11.2026",
   date: "26.11.2026",
@@ -158,7 +165,7 @@ describe("Срез 02: КП и счёт", () => {
     expect(body.pdfPath).toMatch(/\.pdf$/);
   });
 
-  it.runIf(DATABASE_URL)("сохраняет шаблон и документ в базе среза", async () => {
+  it("сохраняет шаблон и документ в базе среза", async () => {
     const pool = new Pool({ connectionString: DATABASE_URL });
     try {
       const tenant = await pool.query<{ id: string }>(

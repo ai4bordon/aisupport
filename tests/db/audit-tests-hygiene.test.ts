@@ -200,12 +200,26 @@ describe("гигиена тестовой оснастки (аудит B13, B14)
     expect(report.failed).toBe(0);
   });
 
-  it("помощники не переключают общую строку подключения", async () => {
-    for (const file of ["tests/db/helpers.ts", "tests/limits/helpers.ts"]) {
+  it("помощники и интеграционные проверки не переключают общий DATABASE_URL", async () => {
+    for (const file of [
+      "tests/db/helpers.ts",
+      "tests/limits/helpers.ts",
+      "tests/integration/13-import-knowledge-site.test.ts",
+    ]) {
       const source = await readFile(resolve(REPO_ROOT, file), "utf8");
       expect(source).not.toMatch(
         /process\.env(?:\.DATABASE_URL|\[\s*["']DATABASE_URL["']\s*\])\s*=/,
       );
+    }
+  });
+
+  it("интеграционные проверки не пропускаются при отсутствии DATABASE_URL", async () => {
+    for (const file of [
+      "tests/integration/02-quote-invoice.test.ts",
+      "tests/integration/05-max-polling-adapter.test.ts",
+    ]) {
+      const source = await readFile(resolve(REPO_ROOT, file), "utf8");
+      expect(source).not.toMatch(/describe\.skipIf|it\.runIf|\.skipIf\(/);
     }
   });
 
