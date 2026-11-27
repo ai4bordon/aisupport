@@ -12,10 +12,8 @@
 
 **ДОПУЩЕНИЕ A-DATA-03:** `created_at`/`updated_at` — `timestamptz`, часовой пояс UTC.
 
-**ДОПУЩЕНИЕ A-DATA-04:** вектор эмбеддинга имеет 1536 измерений, модель `text-embedding-3-small`.
-
-**ДОПУЩЕНИЕ A-DATA-05:** векторный поиск комбинирует векторное расстояние и точный текстовый поиск; минимальная реализация первого тикета использует векторный поиск и полнотекстовый запасной вариант через `tsvector`.
-
+**ДОПУЩЕНИЕ A-DATA-04:** размерность эмбеддингов — 1536; модель — `qwen3-embedding-8b` через OpenCode Go (ADR-0013).
+**ДОПУЩЕНИЕ A-DATA-05:** векторный поиск используется для БЗ и статей; каталог ищется структурно. Доступ к поиску ограничен разрешёнными циклами одобрения.
 ## 2. Группы таблиц
 
 | Группа | Таблицы |
@@ -100,17 +98,20 @@
 | `tenant_id` | uuid | FK, not null |
 | `conversation_id` | uuid | FK, not null |
 | `text` | text | not null |
-| `channel` | text | not null; `max` или `email` |
-| `recipient` | text | not null; диалог MAX или email-адресат веб-доставки |
-| `contact_label` | text | null; метка email для модели/трассы |
 | `due_at` | timestamptz | not null |
 | `owner` | text | not null |
-| `status` | text | not null; `promised`, `preparing`, `sent`, `overdue` |
-| `reminded_at` | timestamptz | null |
+| `status` | text | not null; `open`, `done`, `overdue`; default `open` |
+| `reminded_at` | timestamptz | null; автоматического напоминания нет |
 | `created_at` | timestamptz | not null, default now() |
+| `source_kind` | text | null; тип источника |
+| `source_id` | text | null; идентификатор источника |
+| `is_synthetic` | boolean | not null, default false |
+| `channel` | text | not null; `max` или `email`, default `max` |
+| `contact_email` | text | null; адресат для кабинета менеджера, не передаётся модели/трассе |
+| `contact_label` | text | null; метка email для модели/трассы |
+| `external_chat_id` | text | null; адресат-диалог MAX |
 
-Индекс: `(tenant_id, status, due_at)`.
-### 3.6 `products`
+Индексы: `(tenant_id, status, due_at)` и `(tenant_id, due_at)`.
 Источник — фид `Mindbox.yml.gz.xml` заказчика: 136 040 позиций, 1 232 вендора, валюта RUR.
 
 | Колонка | Тип | Ограничения |
@@ -473,34 +474,32 @@
 
 Миграции выполняются `node-pg-migrate`; каждая миграция — SQL-файл в `db/migrations/`. Номера закреплены за срезами волны 1: ядро 100–999, каталог 1000–1999, база знаний 2000–2999, документы 3000–3999, доступ 4000–4999, каналы 5000–5999, волна 2 — 6000–6999. Номер выбирает exec, агент числа не назначает. Миграции обратимы и выполняются в одной транзакции, если операция не требует `CREATE EXTENSION CONCURRENTLY`.
 
-| № | Миграция | Содержимое | Зависит от | Срез |
-|---|---|---|---|---|
-| 100 | `extensions` | `pgcrypto`, `vector` | — | ядро |
-| 110 | `tenants` | `tenants` | 100 | ядро |
-| 120 | `conversations` | `conversations`, `messages` | 110 | ядро |
-| 130 | `knowledge_core` | `kb_documents`, `kb_articles`, `kb_chunks`, `agent_steps`, индексы HNSW/GIN | 110 | ядро |
-| 140 | `escalations_promises` | `escalations`, `promises` | 120 | ядро |
-| 150 | `policy_rules` | `policy_rules` | 110 | ядро |
-| 160 | `audit` | `audit_log` | 110 | ядро |
-| 170 | `intent_taxonomy` | `intent_taxonomy` + начальные девять категорий | 110 | ядро |
-| 1000 | `catalog` | `products`, `catalog_categories`, `price_rules` | 110 | каталог |
-| 1010 | `clients_orders_licenses` | `clients`, `orders`, `licenses` | 110 | каталог |
-| 1020 | `catalog_snapshots` | `catalog_snapshots` | 110 | каталог |
-| 2000 | `kb_sources` | `kb_sources`, `kb_source_snapshots` | 110 | база знаний |
-| 3000 | `templates_documents` | `templates`, `documents` | 120 | документы |
-| 4000 | `usage_counters` | `usage_counters` | 110 | доступ |
-| 5000 | `channel_state` | `channel_state` | 120 | каналы |
-| 5100 | `conversation_mask` | `conversation_mask` — таблица соответствий меток ПД по диалогам | 120 | ядро |
-| 5200 | `chunk_embedding_model` | `kb_chunks.embedding_model` — модель индекса вектора | 130 | база знаний |
-| 5300 | `conversation_slots` | `conversation_slots` — состояние подбора в диалоге | 120 | ядро |
-| 2100 | `kb_document_upload` | `kb_documents` — результат разбора, состояние ошибки и провенанс загрузки | 130 | загрузка документов |
-| 6300 | `shadow_mode_queue` | `escalations.channel`, `result`, `trace_ref`; removal of `channel_state.shadow_mode` | 120, 140, 5000 | режим тени |
-| 6301 | `shadow_flag` | `escalations.is_shadow` — признак записи из режима тени | 6300 | режим тени |
-| 6400 | `runtime_safety` | `agent_steps.step_key` — идемпотентный ключ шага трассы | 130 | устойчивость |
-| 6500 | `promises_provenance` | Поля происхождения и канала доставки `promises`; индекс срока | 140 | обещания |
-Диапазон 51xx–53xx занят расширениями ядра и базы знаний. Волна 2 использует существующие миграции 6300–6600: 6300 и 6301 относятся к очереди режима тени, 6400 добавляет `agent_steps.step_key`, 6500 расширяет происхождение обещаний, 6600 добавляет жизненный цикл черновиков статей. Блокировка диалога в срезе 10 обеспечивается кодом и отдельной миграции не имеет.
-
-Тикеты 03 и 04 разведены по разным диапазонам, чтобы их миграции не пересекались: загрузка документов — 2100 (диапазон базы знаний 2xxx), черновики статей — 6600 (диапазон волны 2, свободен от 6400 у среза устойчивости). Оба номера закреплены за соответствующим тикетом; новые срезы эти номера не занимают.
+| 100 | `100_extensions.sql` | `pgcrypto`, `vector` | — | ядро |
+| 110 | `110_tenants.sql` | `tenants` | 100 | ядро |
+| 120 | `120_conversations.sql` | `conversations`, `messages` | 110 | ядро |
+| 130 | `130_knowledge_core.sql` | `kb_documents`, `kb_articles`, `kb_chunks`, `agent_steps`, индексы HNSW/GIN | 110, 120 | ядро |
+| 140 | `140_escalations_promises.sql` | `escalations`, `promises` | 120 | ядро |
+| 150 | `150_policy_rules.sql` | `policy_rules` | 110 | ядро |
+| 160 | `160_audit.sql` | `audit_log` | 110 | ядро |
+| 170 | `170_intent_taxonomy.sql` | `intent_taxonomy` + начальные девять категорий | 110 | ядро |
+| 1000 | `1000_catalog.sql` | `products`, `catalog_categories`, `price_rules` | 110 | каталог |
+| 1010 | `1010_clients_orders_licenses.sql` | `clients`, `orders`, `licenses` | 110 | каталог |
+| 1020 | `1020_catalog_snapshots.sql` | `catalog_snapshots` | 110 | каталог |
+| 2000 | `2000_kb_sources.sql` | `kb_sources`, `kb_source_snapshots` | 110 | база знаний |
+| 2100 | `2100_kb_document_upload.sql` | `kb_documents`: разбор, ошибка и провенанс загрузки | 130 | загрузка документов |
+| 3000 | `3000_templates_documents.sql` | `templates`, `documents` | 120 | документы |
+| 4000 | `4000_usage_counters.sql` | `usage_counters` | 110 | доступ |
+| 5000 | `5000_channel_state.sql` | `channel_state` | 120 | каналы |
+| 5100 | `5100_conversation_mask.sql` | `conversation_mask` — соответствия меток ПД по диалогам | 120 | ядро |
+| 5200 | `5200_chunk_embedding_model.sql` | `kb_chunks.embedding_model` — модель индекса вектора | 130 | база знаний |
+| 5300 | `5300_conversation_slots.sql` | `conversation_slots` — состояние подбора | 120 | ядро |
+| 6300 | `6300_shadow_mode_queue.sql` | `escalations.channel`, `result`, `trace_ref`; удаление `channel_state.shadow_mode` | 120, 140, 5000 | режим тени |
+| 6301 | `6301_shadow_flag.sql` | `escalations.is_shadow` — признак результата режима тени | 6300 | режим тени |
+| 6400 | `6400_runtime_safety.sql` | `agent_steps.step_key` — идемпотентный ключ шага трассы | 130 | устойчивость |
+| 6500 | `6500_promises_provenance.sql` | provenance, канал и адресат/контакт `promises`; индекс срока | 140 | обещания |
+| 6600 | `6600_article_draft_review.sql` | провенанс и жизненный цикл черновиков `kb_articles` | 130 | статьи |
+Миграционная таблица выше охватывает все 24 SQL-файла, присутствующие в `db/migrations/`; строки упорядочены по номеру, а 6300–6600 отражают существующие миграции волны 2. Диапазон 51xx–53xx занят расширениями ядра и БЗ. Блокировка диалога в тикете 10 обеспечивается кодом, отдельной миграции не имеет.
+Тикеты 03 и 04 используют отдельные выделенные номера: загрузка документов — 2100; жизненный цикл черновиков статей — 6600. Новые тикеты эти номера не занимают.
 
 ### 6.1 Порядок первого тикета
 
