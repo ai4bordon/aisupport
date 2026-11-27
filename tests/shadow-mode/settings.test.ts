@@ -128,4 +128,48 @@ describe("режим тени: запись очереди менеджера", 
     );
     expect(Number(visible.rows[0]?.count ?? "0")).toBe(0);
   });
+
+  /**
+   * Отключение режима не трогает уже созданные записи очереди: менеджер
+   * должен видеть, что было подготовлено в тени, даже когда режим выключили.
+   */
+  it("отключение режима не удаляет ранее созданные записи очереди", async () => {
+    await testPool().query("UPDATE tenants SET shadow_mode = true WHERE id = $1", [tenantId]);
+    const id = await recordShadowDraft(testPool(), {
+      tenantId,
+      conversationId,
+      channel: "web",
+      summary: "Черновик подготовлен в режиме тени.",
+      result: "Черновик ответа.",
+      sources: [],
+      traceRef: conversationId,
+    });
+
+    await testPool().query("UPDATE tenants SET shadow_mode = false WHERE id = $1", [tenantId]);
+
+    expect(await isShadowMode(testPool(), tenantId)).toBe(false);
+
+    const row = await testPool().query<{ status: string; result: string }>(
+      "SELECT status, result FROM escalations WHERE id = $1",
+      [id],
+    );
+    expect(row.rows[0]?.status).toBe("open");
+    expect(row.rows[0]?.result).toBe("Черновик ответа.");
+  });
+
+  /**
+   * Настройка не кэшируется: следующая обработка видит новое значение без
+   * перезапуска процесса. Иначе отключение режима не действовало бы до
+   * перезапуска сервера.
+   */
+  it("переключение режима видно следующей обработке без перезапуска", async () => {
+    await testPool().query("UPDATE tenants SET shadow_mode = true WHERE id = $1", [tenantId]);
+    const before = await isShadowMode(testPool(), tenantId);
+
+    await testPool().query("UPDATE tenants SET shadow_mode = false WHERE id = $1", [tenantId]);
+    const after = await isShadowMode(testPool(), tenantId);
+
+    expect(before).toBe(true);
+    expect(after).toBe(false);
+  });
 });

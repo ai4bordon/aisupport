@@ -216,4 +216,161 @@ describe("POST /v1/chat в режиме тени", () => {
     );
     expect(Number(queue.rows[0]?.count ?? "0")).toBe(0);
   });
+
+  /**
+   * Граница момента переключения: значение режима снимается в начале
+   * обработки и действует на неё целиком. Выключение режима посреди
+   * обработки не превращает текущий запрос в отправленный ответ.
+   */
+  it("выключение режима посреди обработки не превращает текущий запрос в ответ", async () => {
+    await testPool().query("UPDATE tenants SET shadow_mode = true WHERE id = $1", [tenantId]);
+
+    // Модель отвечает и переключает режим до того, как маршрут проверит
+    // результат: значение режима уже снято в начале обработки.
+    setModelClient({
+      complete: async (request: ModelRequest): Promise<ModelResult> => {
+        const isClassification = request.messages.some((message) =>
+          message.content.includes("класс обращения"),
+        );
+        if (!isClassification) {
+          await testPool().query(
+            "UPDATE tenants SET shadow_mode = false WHERE id = $1",
+            [tenantId],
+          );
+        }
+        return isClassification
+          ? {
+              text: "howto",
+              amounts: [],
+              citations: [],
+              tokensIn: 10,
+              tokensOut: 2,
+              costRub: 0.1,
+              model: "stub-model",
+            }
+          : {
+              text: ARTICLE_TEXT,
+              amounts: [],
+              citations: [ARTICLE_TEXT],
+              tokensIn: 10,
+              tokensOut: 20,
+              costRub: 0.1,
+              model: "stub-model",
+            };
+      },
+    });
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "6a1b2c3d-1111-4111-8111-111111111111",
+        message: {
+          client_message_id: "6a1b2c3d-2222-4222-8222-222222222222",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    const body = (await response.json()) as {
+      outcome: string;
+      answer: { text: string } | null;
+    };
+    expect(body.outcome).toBe("escalate");
+    expect(body.answer).toBeNull();
+
+    const agentMessages = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM messages WHERE tenant_id = $1 AND role = 'agent'",
+      [tenantId],
+    );
+    expect(Number(agentMessages.rows[0]?.count ?? "0")).toBe(0);
+  });
+
+  /**
+   * Отключение режима действует только на новую обработку: следующий
+   * подтверждённый запрос отправляет ответ, а созданная ранее запись
+   * очереди остаётся на месте.
+   */
+  it("после отключения следующий запрос отвечает, а прежняя запись очереди остаётся", async () => {
+    await testPool().query("UPDATE tenants SET shadow_mode = true WHERE id = $1", [tenantId]);
+
+    const shadowConversation = "7a1b2c3d-1111-4111-8111-111111111111";
+    await POST(
+      chatRequest({
+        conversation_id: shadowConversation,
+        message: {
+          client_message_id: "7a1b2c3d-2222-4222-8222-222222222222",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    await testPool().query("UPDATE tenants SET shadow_mode = false WHERE id = $1", [tenantId]);
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "7a1b2c3d-3333-4333-8333-333333333333",
+        message: {
+          client_message_id: "7a1b2c3d-4444-4444-8444-444444444444",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    const body = (await response.json()) as {
+      outcome: string;
+      answer: { text: string } | null;
+    };
+    expect(body.outcome).toBe("respond");
+    expect(body.answer?.text).toContain("120 минут");
+
+    // Прежняя запись очереди не удалена и не отправлена: менеджер её видит.
+    const queue = await testPool().query<{ count: string; result: string }>(
+      "SELECT count(*)::text AS count, min(result) AS result FROM escalations WHERE tenant_id = $1",
+      [tenantId],
+    );
+    expect(Number(queue.rows[0]?.count ?? "0")).toBe(1);
+    expect(queue.rows[0]?.result).toContain("120 минут");
+  });
+
+  /**
+   * Обычная эскалация остаётся эскалацией: наличие черновика в очереди не
+   * превращает её в отправленный ответ даже после отключения режима тени.
+   */
+  it("эскалация не превращается в ответ после отключения режима", async () => {
+    process.env.ESCALATION_MODE = "on";
+    // Модель отвечает без подтверждённого источника: результат — эскалация.
+    setModelClient(okModel("Ответ из памяти модели: скидка 40 процентов."));
+    await testPool().query("UPDATE tenants SET shadow_mode = true WHERE id = $1", [tenantId]);
+
+    await POST(
+      chatRequest({
+        conversation_id: "8a1b2c3d-1111-4111-8111-111111111111",
+        message: {
+          client_message_id: "8a1b2c3d-2222-4222-8222-222222222222",
+          text: "Как настроить квантовый телепорт?",
+        },
+      }),
+    );
+
+    await testPool().query("UPDATE tenants SET shadow_mode = false WHERE id = $1", [tenantId]);
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "8a1b2c3d-3333-4333-8333-333333333333",
+        message: {
+          client_message_id: "8a1b2c3d-4444-4444-8444-444444444444",
+          text: "Как настроить квантовый телепорт?",
+        },
+      }),
+    );
+
+    const body = (await response.json()) as {
+      outcome: string;
+      answer: { text: string } | null;
+      escalation: { reason: string } | null;
+    };
+    // Эскалация не превращается в ответ: клиент ответа агента не получает.
+    expect(body.outcome).toBe("escalate");
+    expect(body.answer).toBeNull();
+    expect(body.escalation?.reason).toBe("no_confirmed_source");
+  });
 });

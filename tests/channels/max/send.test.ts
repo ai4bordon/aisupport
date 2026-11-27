@@ -206,6 +206,66 @@ describe("MAX-канал: обработка события", () => {
     expect(queued[0]?.channel).toBe("max");
   });
 
+  /**
+   * Отключение режима действует только на новую обработку: следующее
+   * событие отправляет ответ, а созданная ранее запись очереди остаётся.
+   */
+  it("после отключения режима следующее событие отправляет ответ ровно один раз", async () => {
+    const client = stubClient();
+    const queued: ShadowQueueRecord[] = [];
+    let shadow = true;
+    const session = await createMaxSession({
+      token: TOKEN,
+      client,
+      runAgent: async () => respondOutcome,
+      shadowMode: async () => shadow,
+      recordShadowDraft: async (record) => {
+        queued.push(record);
+        return "queue-id-3";
+      },
+    });
+
+    await handleMaxUpdate(session, update("mid-before-off", 4242));
+    expect(client.sent).toHaveLength(0);
+    expect(queued).toHaveLength(1);
+
+    shadow = false;
+    await handleMaxUpdate(session, update("mid-after-off", 4242));
+
+    expect(client.sent).toHaveLength(1);
+    expect(client.sent[0]?.text).toBe("Проверенный ответ");
+    // Прежняя запись очереди не удалена: менеджер её видит.
+    expect(queued).toHaveLength(1);
+  });
+
+  /**
+   * Значение режима снимается один раз в начале обработки события:
+   * переключение настройки посреди обработки не меняет её исход.
+   */
+  it("выключение режима посреди обработки не превращает событие в отправку", async () => {
+    const client = stubClient();
+    const queued: ShadowQueueRecord[] = [];
+    let shadow = true;
+    const session = await createMaxSession({
+      token: TOKEN,
+      client,
+      runAgent: async () => {
+        shadow = false;
+        return respondOutcome;
+      },
+      shadowMode: async () => shadow,
+      recordShadowDraft: async (record) => {
+        queued.push(record);
+        return "queue-id-4";
+      },
+    });
+
+    await handleMaxUpdate(session, update("mid-switch-inside", 4242));
+
+    expect(client.sent).toHaveLength(0);
+    expect(queued).toHaveLength(1);
+  });
+
   it("повторное событие с тем же идентификатором не создаёт второе обращение", async () => {
     const client = stubClient();
     let agentCalls = 0;
