@@ -24,6 +24,7 @@
 | Каталог | срез «импорт фида» | `catalog.search(query: string, filters: CatalogFilters): Promise<CatalogHit[]>` |
 | Документы | срез «документы» | `renderQuote(quote: QuoteInput): Promise<RenderedDocument>` |
 | MAX-канал | срез «MAX-адаптер» | `channels/max` с методами `start()`, `stop()` |
+| Адрес Bot API MAX | `https://platform-api.max.ru` | `platform-api2.max.ru` не резолвится; `https://botapi.max.ru` — рабочий алиас |
 | Эмбеддинги | замороженная спецификация | HTTP-эндпоинт и формат ответа; каждый срез реализует свой клиент |
 
 Подробное описание владения файлами, диапазонов миграций и правил параллельной работы — `docs/plans/wave-1.md`.
@@ -109,7 +110,7 @@ type RenderedDocument = {
 
 **ДОПУЩЕНИЕ A-API-01:** все маршруты внешнего API обслуживаются Next.js Route Handlers; отдельный FastAPI-процесс не нужен. Заменяется решением владельца по стеку.
 
-**ДОПУЩЕНИЕ A-API-03:** основной LLM-адрес — `https://opencode.ai/inference/go/v1/chat/completions` через OpenCode Go с моделью DeepSeek; запасной адрес задаётся отдельным URL из переменных окружения. Векторы — `https://opencode.ai/inference/go/openai/v1/embeddings`, модель `text-embedding-3-small`.
+**ДОПУЩЕНИЕ A-API-03:** основной LLM-адрес — `https://opencode.ai/inference/go/v1/chat/completions` через OpenCode Go с моделью DeepSeek; запасной адрес задаётся отдельным URL из переменных окружения. Go требует заголовок `x-opencode-session` со значением `ses_<идентификатор диалога>`; без него эндпоинт отвечает 400. Векторы — `https://opencode.ai/inference/go/openai/v1/embeddings`, модель `qwen3-embedding-8b`, размерность 1536; заголовок сессии для векторов не требуется.
 
 Факт проверки 26.11: `GET https://opencode.ai/inference/go/v1/models` без ключа вернул `200`; `POST .../embeddings` без ключа не ответил за 20 с и был прерван по тайм-ауту. Адреса и доступность проверяются повторно на задаче 1 с ключом владельца; при отличии фиксируются в ADR.
 
