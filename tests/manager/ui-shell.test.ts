@@ -26,6 +26,7 @@ import { ManagerErrorState } from "@/app/manager/components/managerErrorState";
 import { ManagerGate } from "@/app/manager/components/managerGate";
 import { ManagerLoading } from "@/app/manager/components/managerLoading";
 import { ManagerShell } from "@/app/manager/components/managerShell";
+import { ManagerTabs } from "@/app/manager/components/managerTabs";
 import { MANAGER_SECTIONS } from "@/app/manager/components/managerSections";
 
 /** Текущий путь для `usePathname` — его читает шлюз кабинета. */
@@ -158,6 +159,20 @@ describe("бренд-раскладка оболочки", () => {
     expect(styles).toContain("var(--sl-font-sans)");
     expect(styles).toContain("var(--sl-logo-guard)");
   });
+
+  it("логотип кабинета — утверждённый вариант из пакета заказчика", () => {
+    const approved = resolve(
+      REPO_ROOT,
+      "docs/лого софтлайн/Софтлайн-решения+SOFL_Logo_rgb (2).png",
+    );
+    const used = resolve(MANAGER_DIR, "softline-logo.png");
+
+    expect(existsSync(approved)).toBe(true);
+    expect(existsSync(used)).toBe(true);
+    // Файл логотипа копируется, а не рисуется: побайтовое совпадение с
+    // утверждённым файлом из `docs/лого софтлайн/`.
+    expect(readFileSync(used)).toEqual(readFileSync(approved));
+  });
 });
 
 describe("доступность оболочки", () => {
@@ -180,6 +195,17 @@ describe("доступность оболочки", () => {
     for (const section of MANAGER_SECTIONS) {
       expect(screen.getByRole("link", { name: new RegExp(section.label, "i") })).toBeInTheDocument();
     }
+  });
+
+  it("состав разделов совпадает с замыслом кабинета", () => {
+    expect(MANAGER_SECTIONS.map((section) => section.id)).toEqual([
+      "overview",
+      "queue",
+      "knowledge",
+      "agent",
+      "analytics",
+      "sandbox",
+    ]);
   });
 
   it("у кнопки есть доступное имя и явный тип", () => {
@@ -207,6 +233,63 @@ describe("доступность оболочки", () => {
 
     expect(styles).toContain(":focus-visible");
     expect(styles).toMatch(/outline:[^;]*var\(--sl-accent\)/);
+  });
+});
+
+describe("вкладки оболочки", () => {
+  it("полоса вкладок объявлена как tablist, вкладки — как tab", () => {
+    render(
+      createElement(ManagerTabs, {
+        tabs: [
+          { id: "one", label: "Первый", href: "/manager/one" },
+          { id: "two", label: "Второй", disabled: true, badge: "в работе" },
+        ],
+        activeId: "one",
+        label: "Разделы кабинета",
+      }),
+    );
+
+    expect(screen.getByRole("tablist", { name: "Разделы кабинета" })).toBeInTheDocument();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+    expect(tabs[1]).toHaveAttribute("aria-disabled", "true");
+    expect(tabs[1]).toBeDisabled();
+    expect(tabs[1]).toHaveTextContent("в работе");
+  });
+
+  it("выключенная вкладка никуда не ведёт и не получает адрес", () => {
+    render(
+      createElement(ManagerTabs, {
+        tabs: [{ id: "one", label: "Первый", href: "/manager/one", disabled: true }],
+        activeId: "one",
+        label: "Разделы кабинета",
+      }),
+    );
+
+    const tab = screen.getByRole("tab");
+    expect(tab.tagName).toBe("BUTTON");
+    expect(tab).toBeDisabled();
+    expect(tab).not.toHaveAttribute("href");
+  });
+
+  it("вкладки достижимы с клавиатуры: стрелки переключают фокус", () => {
+    render(
+      createElement(ManagerTabs, {
+        tabs: [
+          { id: "one", label: "Первый", href: "/manager/one" },
+          { id: "two", label: "Второй", href: "/manager/two" },
+        ],
+        activeId: "one",
+        label: "Разделы кабинета",
+      }),
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    tabs[0]?.focus();
+    fireEvent.keyDown(tabs[0] as HTMLElement, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(tabs[1]);
   });
 });
 

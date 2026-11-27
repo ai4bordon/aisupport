@@ -216,6 +216,54 @@
   cursor: not-allowed;
 }
 
+/* Вкладки разделов */
+.sl-m-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-1);
+  border-bottom: 1px solid var(--sl-divider);
+}
+
+.sl-m-tabs__item {
+  display: inline-flex;
+}
+
+.sl-m-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sl-space-2);
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--sl-text-secondary);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sl-m-tabs__tab[aria-selected="true"] {
+  border-bottom-color: var(--sl-accent);
+  color: var(--sl-accent);
+}
+
+.sl-m-tabs__tab:disabled {
+  color: var(--sl-footer);
+  cursor: not-allowed;
+}
+
+.sl-m-tabs__badge {
+  padding: 0 var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-bg);
+  color: var(--sl-footer);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 /* Фокус виден на всех интерактивных элементах */
 .sl-m-shell a:focus-visible,
 .sl-m-shell button:focus-visible,

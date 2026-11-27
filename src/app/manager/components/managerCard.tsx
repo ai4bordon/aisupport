@@ -26,10 +26,14 @@ export function ManagerCard({
   id?: string;
   children?: ReactNode;
 }) {
+  // `aria-labelledby` ставится только когда заголовок есть: ссылка на
+  // несуществующий id ломает навигацию скринридера.
+  const titleId = title && id ? `${id}-title` : undefined;
+
   return (
-    <section className="sl-m-card" id={id} aria-labelledby={id ? `${id}-title` : undefined}>
+    <section className="sl-m-card" id={id} aria-labelledby={titleId}>
       {title ? (
-        <h2 className="sl-m-card__title" id={id ? `${id}-title` : undefined}>
+        <h2 className="sl-m-card__title" id={titleId}>
           {title}
         </h2>
       ) : null}
