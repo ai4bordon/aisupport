@@ -121,6 +121,7 @@ const NO_SLOTS: RequirementSlots = {
   termMonths: null,
   deployment: null,
   vendor: null,
+  productQuery: null,
 };
 
 describe("подбор по каталогу (R1a/R1b)", () => {
@@ -212,5 +213,28 @@ describe("подбор по каталогу (R1a/R1b)", () => {
     expect(slots.quantity).toBe(50);
     expect(slots.termMonths).toBe(12);
     expect(slots.deployment).toBe("облако");
+  });
+
+  it("срок не путается с количеством", () => {
+    // Регрессия: «12 месяцев» считалось количеством 12, и подбор уходил не
+    // туда.
+    const slots = extractSlots("На 12 месяцев, развёртываем на сервере");
+    expect(slots.quantity).toBeNull();
+    expect(slots.termMonths).toBe(12);
+    expect(slots.deployment).toBe("сервер");
+  });
+
+  it("ответ на уточняющий вопрос не подменяет название продукта", async () => {
+    // Регрессия: ответ на вопрос о сроке («на 12 месяцев, развёртываем на
+    // сервере») подменял сохранённое название продукта своим текстом, и
+    // поиск уходил не туда. Название берётся из сохранённого слота.
+    const saved = { ...NO_SLOTS, productQuery: "mdaemon security gateway" };
+    const result = await lookupCatalog("На 12 месяцев, развёртываем на сервере", saved, {
+      tenantId,
+      limit: 5,
+    });
+
+    expect(result.productQuery).toBe("mdaemon security gateway");
+    expect(result.matches.length).toBeGreaterThan(0);
   });
 });

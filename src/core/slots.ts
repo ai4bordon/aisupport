@@ -10,7 +10,7 @@ import { getPool } from "@/db/pool";
 import type { RequirementSlots } from "@/core/catalog-lookup";
 
 /** Имена слотов — как в таблице `conversation_slots`. */
-const SLOT_NAMES = ["quantity", "termMonths", "deployment", "vendor"] as const;
+const SLOT_NAMES = ["quantity", "termMonths", "deployment", "vendor", "productQuery"] as const;
 
 /**
  * Читает собранные слоты диалога.
@@ -26,6 +26,7 @@ export async function loadSlots(
     termMonths: null,
     deployment: null,
     vendor: null,
+    productQuery: null,
   };
 
   const result = await getPool().query<{ slot: string; value: string }>(

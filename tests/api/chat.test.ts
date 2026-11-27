@@ -81,6 +81,31 @@ async function seedArticle(): Promise<void> {
   );
 }
 
+/**
+ * Фикстура каталога: одна позиция Adobe InCopy на 10 пользователей.
+ *
+ * Позиция нужна для сценария подбора: без неё узел каталога не находит
+ * продукт и ответ уходит в эскалацию.
+ */
+async function seedCatalogProduct(): Promise<void> {
+  const snapshot = await testPool().query<{ id: string }>(
+    `INSERT INTO catalog_snapshots (tenant_id, source_url, feed_date, fetched_at, snapshot_hash, offers_count, categories_count, is_current, source_kind)
+     VALUES ($1, 'https://store.softline.ru/feeds/Softline.yml.gz', now(), now(), $2, 1, 0, true, 'test')
+     RETURNING id`,
+    [tenantId, `hash-api-chat-${Date.now()}`],
+  );
+
+  await testPool().query(
+    `INSERT INTO products (tenant_id, offer_id, name, vendor, product_url, price, currency_id, available, delivery, params, snapshot_id, status, published)
+     VALUES ($1, '504', 'Adobe InCopy CC Professional', 'Adobe Systems', 'https://store.softline.ru/adobe/504/', 1200, 'RUR', true, true, $2::jsonb, $3, 'approved_by_customer', true)`,
+    [
+      tenantId,
+      JSON.stringify({ "К-во пользователей": "10", "Срок действия": "12 мес." }),
+      snapshot.rows[0]?.id ?? "",
+    ],
+  );
+}
+
 describe("POST /v1/chat", () => {
   beforeAll(async () => {
     process.env.SESSION_SECRET ??= "test-session-secret-not-a-real-key";
@@ -95,6 +120,7 @@ describe("POST /v1/chat", () => {
     // порядок выполнения не должен влиять на результат.
     process.env.ESCALATION_MODE = "on";
     await seedArticle();
+    await seedCatalogProduct();
     setModelClient(okModel(ARTICLE_TEXT, [ARTICLE_TEXT]));
   });
 
@@ -253,6 +279,57 @@ describe("POST /v1/chat", () => {
     const body = (await second.json()) as { conversation_id: string };
 
     expect(body.conversation_id).toBe("1a2b3c4d-1111-4111-8111-111111111111");
+  });
+
+  it("второй запрос с тем же conversation_id продолжает сбор слотов", async () => {
+    // AC 5 тикета 14: собранные слоты переживают отдельные сообщения в одном
+    // диалоге. Первый ответ задаёт вопрос о количестве, второй запрос с
+    // ответом на вопрос закрывает слот и даёт карточку с ценой.
+    const conversationId = "1a2b3c4d-2222-4222-8222-222222222222";
+
+    const first = await POST(
+      chatRequest({
+        conversation_id: conversationId,
+        message: {
+          client_message_id: "1a2b3c4d-3333-4333-8333-333333333333",
+          text: "Нужен Adobe InCopy",
+        },
+      }),
+    );
+    const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0];
+    const firstBody = (await first.json()) as {
+      outcome: string;
+      answer: { text: string } | null;
+    };
+
+    expect(firstBody.outcome).toBe("respond");
+    expect(firstBody.answer?.text).toContain("?");
+
+    const second = await POST(
+      chatRequest(
+        {
+          conversation_id: conversationId,
+          message: {
+            client_message_id: "1a2b3c4d-4444-4444-8444-444444444444",
+            text: "Нужно 10 штук",
+          },
+        },
+        cookie,
+      ),
+    );
+    const secondBody = (await second.json()) as {
+      outcome: string;
+      answer: { text: string; sources: { kind: string; location: string | null }[] } | null;
+    };
+
+    expect(secondBody.outcome).toBe("respond");
+    // Слот количества закрыт: агент больше не спрашивает о количестве и
+    // показывает позицию с ценой из снимка фида.
+    expect(secondBody.answer?.text).not.toContain("Сколько лицензий");
+    expect(secondBody.answer?.text).toMatch(/₽/);
+    expect(secondBody.answer?.sources.some((source) => source.kind === "catalog_product")).toBe(
+      true,
+    );
   });
 
   it("conversation_id, не совпадающий с cookie, даёт 403", async () => {

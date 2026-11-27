@@ -8,6 +8,10 @@
 -- Таблица намеренно отдельная от `messages`: состояние подбора — это
 -- производная величина, а не сообщение, и оно не должно попадать в
 -- историю переписки как реплика клиента.
+--
+-- Имена слотов. Список открыт: новый слот добавляется без правки
+-- ограничения, иначе добавление слота требовало бы новой миграции на
+-- уже применённой таблице.
 CREATE TABLE conversation_slots (
   conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   slot text NOT NULL,
@@ -15,7 +19,7 @@ CREATE TABLE conversation_slots (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT conversation_slots_pkey PRIMARY KEY (conversation_id, slot),
   CONSTRAINT conversation_slots_slot_check
-    CHECK (slot IN ('quantity', 'termMonths', 'deployment', 'vendor'))
+    CHECK (slot <> '' AND length(slot) <= 64)
 );
 
 -- Down Migration

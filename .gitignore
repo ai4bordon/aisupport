@@ -49,3 +49,5 @@ chat-out.json
 chat-req.json
 cookies.txt
 diag-*.ts
+headers.txt
+*.headers

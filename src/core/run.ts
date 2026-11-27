@@ -367,6 +367,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     termMonths: null,
     deployment: null,
     vendor: null,
+    productQuery: null,
   };
   try {
     slots = await loadSlots(input.conversationId);
@@ -376,6 +377,7 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       termMonths: slots.termMonths ?? fromText.termMonths,
       deployment: slots.deployment ?? fromText.deployment,
       vendor: slots.vendor ?? fromText.vendor,
+      productQuery: slots.productQuery ?? fromText.productQuery,
     };
     await saveSlots(input.conversationId, slots);
 
@@ -387,6 +389,18 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
       () => lookupCatalog(input.text, slots, { tenantId }),
       "catalog",
     );
+    // Название продукта сохраняется в диалоге: ответ на уточняющий вопрос
+    // названия не содержит, и без сохранённого названия следующий поиск по
+    // каталогу ничего бы не нашёл. Сохраняется только то, что каталог
+    // действительно нашёл: обычное слово названием продукта быть не может.
+    if (
+      catalogResult.matches.length > 0 &&
+      catalogResult.productQuery !== null &&
+      slots.productQuery === null
+    ) {
+      slots = { ...slots, productQuery: catalogResult.productQuery };
+      await saveSlots(input.conversationId, slots);
+    }
     await pushStep({
       node: "catalog",
       endpoint: "GET /catalog/search",

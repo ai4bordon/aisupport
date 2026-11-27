@@ -31,6 +31,14 @@ export type RequirementSlots = {
   deployment: string | null;
   /** Вендор, если клиент его назвал. */
   vendor: string | null;
+  /**
+   * Название продукта, как его понял агент.
+   *
+   * Хранится в диалоге: ответ клиента на уточняющий вопрос («нужно 10 штук»)
+   * названия продукта не содержит, и без сохранённого названия поиск по
+   * каталогу не нашёл бы позицию.
+   */
+  productQuery: string | null;
 };
 
 /** Слоты, которые нужно уточнить: порядок соответствует порядку вопросов. */
@@ -46,6 +54,7 @@ export const SLOT_QUESTIONS: Record<keyof RequirementSlots, string> = {
   termMonths: "На какой срок нужна лицензия — 12 месяцев или больше?",
   deployment: "Как разворачиваем — на сервере заказчика или в облаке?",
   vendor: "Какого вендора рассматриваете?",
+  productQuery: "Какой продукт вас интересует?",
 };
 
 /** Найденная позиция каталога вместе с данными для ответа. */
@@ -116,6 +125,10 @@ const STOP_WORDS = new Set([
   "лицензия",
   "лицензию",
   "лицензии",
+  "лицензий",
+  "подписка",
+  "подпиской",
+  "обновлениями",
   "подскажите",
   "подскажи",
   "помогите",
@@ -214,23 +227,29 @@ export function extractVendor(text: string, vendors: readonly string[]): string 
 export function extractSlots(text: string): RequirementSlots {
   const lower = text.toLowerCase();
 
-  let quantity: number | null = null;
-  const quantityMatch = lower.match(/(\d+)\s*(?:шт|штук|лицензи|лицензий|польз|работник|сотрудник|мест|устройств)/u);
-  if (quantityMatch?.[1]) {
-    quantity = Number.parseInt(quantityMatch[1], 10);
-  }
-  if (quantity === null) {
-    const bare = lower.match(/\b(\d{1,5})\b/u);
-    if (bare?.[1]) {
-      quantity = Number.parseInt(bare[1], 10);
-    }
-  }
-
   let termMonths: number | null = null;
   const termMatch = lower.match(/(\d+)\s*(?:месяц|мес|год|лет)/u);
   if (termMatch?.[1]) {
     const value = Number.parseInt(termMatch[1], 10);
     termMonths = lower.includes("год") || lower.includes("лет") ? value * 12 : value;
+  }
+
+  let quantity: number | null = null;
+  // Количество — только рядом со словом про лицензии или пользователей:
+  // «12 месяцев» — это срок, а не количество лицензий.
+  const quantityMatch = lower.match(
+    /(\d+)\s*(?:шт|штук|лицензи[йиюей]|польз\w*|работник\w*|сотрудник\w*|мест\w*|устройств\w*|пк)/u,
+  );
+  if (quantityMatch?.[1]) {
+    quantity = Number.parseInt(quantityMatch[1], 10);
+  }
+  if (quantity === null) {
+    // Голое число берётся, только если в тексте нет срока: иначе «12 месяцев»
+    // превратилось бы в количество 12.
+    const bare = lower.match(/\b(\d{1,5})\b/u);
+    if (bare?.[1] && termMonths === null) {
+      quantity = Number.parseInt(bare[1], 10);
+    }
   }
 
   let deployment: string | null = null;
@@ -240,7 +259,10 @@ export function extractSlots(text: string): RequirementSlots {
     deployment = "сервер";
   }
 
-  return { quantity, termMonths, deployment, vendor: null };
+  // Название продукта здесь не вычисляется: оно выводится из текста в
+  // `lookupCatalog` и сохраняется в диалоге только когда каталог действительно
+  // нашёл позицию. Иначе обычное слово («привет») стало бы названием продукта.
+  return { quantity, termMonths, deployment, vendor: null, productQuery: null };
 }
 
 /** Параметр позиции каталога, приведённый к строке. */
@@ -264,6 +286,9 @@ function paramValue(params: Record<string, string | string[]>, names: string[]):
  * «Количество лицензий»), а при их отсутствии — из названия («на 50 ПК»,
  * «2 устройства»). Без этого позиция без параметров считалась подходящей под
  * любое количество, и в ответ попадали лицензии на одно устройство.
+ *
+ * Значение в фиде — диапазон («от 50 до 50»), поэтому берётся первое число:
+ * «от 50 до 50» без разбора давало 5050, и подходящая позиция отсекалась.
  */
 function licensedCount(item: CatalogItem): number | null {
   const fromParams = paramValue(item.params, [
@@ -272,11 +297,9 @@ function licensedCount(item: CatalogItem): number | null {
     "Количество",
     "Лицензий",
   ]);
-  const fromParamsNumber = fromParams === null
-    ? null
-    : Number.parseInt(fromParams.replace(/[^\d]/g, ""), 10);
-  if (fromParamsNumber !== null && Number.isFinite(fromParamsNumber)) {
-    return fromParamsNumber;
+  if (fromParams !== null) {
+    const number = firstNumber(fromParams);
+    if (number !== null) return number;
   }
 
   const fromName = item.name.match(
@@ -287,6 +310,14 @@ function licensedCount(item: CatalogItem): number | null {
     return Number.isFinite(number) ? number : null;
   }
   return null;
+}
+
+/** Первое число в строке: «от 50 до 50» → 50. */
+function firstNumber(text: string): number | null {
+  const match = text.match(/\d+/);
+  if (!match?.[0]) return null;
+  const number = Number.parseInt(match[0], 10);
+  return Number.isFinite(number) ? number : null;
 }
 
 /**
@@ -314,15 +345,19 @@ function slotSatisfied(
       if (slots.termMonths === null) return false;
       const term = paramValue(item.params, ["Срок действия", "Срок лицензии", "Срок", "Период"]);
       if (term === null) return true;
-      const months = Number.parseInt(term.replace(/[^\d]/g, ""), 10);
-      return Number.isFinite(months) ? months >= slots.termMonths : true;
+      const months = firstNumber(term);
+      return months !== null ? months >= slots.termMonths : true;
     }
     case "deployment": {
       if (slots.deployment === null) return false;
       const delivery = paramValue(item.params, ["Способ доставки", "Тип поставки", "Поставка", "Тип"]);
       if (delivery === null) return true;
-      const cloud = /облак|cloud/i.test(delivery);
-      const server = /сервер|on-?prem|локальн/i.test(delivery);
+      const lower = delivery.toLowerCase();
+      // Электронная поставка подходит любому развёртыванию: лицензия
+      // приходит по почте, а не на сервер заказчика.
+      if (/электронн/i.test(lower)) return true;
+      const cloud = /облак|cloud/i.test(lower);
+      const server = /сервер|on-?prem|локальн/i.test(lower);
       if (slots.deployment === "облако") return cloud;
       return server;
     }
@@ -337,16 +372,23 @@ function slotSatisfied(
  * Возвращает найденные позиции и список слотов, которые ещё нужно уточнить.
  * Пустой `productQuery` означает, что клиент не назвал продукт: по каталогу
  * ничего не ищем, но вендор и слоты из текста всё равно извлекаются.
+ *
+ * Название продукта берётся из сохранённого слота диалога, а при его
+ * отсутствии — из текущего сообщения: ответ на уточняющий вопрос («нужно 10
+ * штук») названия не содержит, и без сохранённого названия поиск по каталогу
+ * не нашёл бы позицию. Порядок именно такой: продукт называют один раз, а
+ * дальше уточняются параметры, и текст ответа на вопрос («на 12 месяцев,
+ * развёртываем на сервере») не должен подменять название продукта.
  */
 export async function lookupCatalog(
   text: string,
   slots: RequirementSlots,
   options: { tenantId: string; limit?: number } ,
 ): Promise<CatalogLookup> {
-  const productQuery = extractProductQuery(text);
+  const productQuery = slots.productQuery ?? extractProductQuery(text);
   const vendors = await listVendors(options.tenantId);
   const vendor = extractVendor(text, vendors);
-  const mergedSlots: RequirementSlots = { ...slots, vendor };
+  const mergedSlots: RequirementSlots = { ...slots, vendor, productQuery };
 
   if (productQuery === null) {
     return { matches: [], productQuery: null, missingSlots: missingSlots(mergedSlots) };
