@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getTenantId } from "@/db/tenant";
 import { readManagerSession } from "@/modules/access";
+import { ModelTimeoutError, ModelUnavailableError } from "@/core/model";
 import { runSandbox } from "@/modules/agent-settings";
 
 /**
@@ -91,7 +92,15 @@ export async function POST(request: Request): Promise<Response> {
         detail: step.detail,
       })),
     });
-  } catch {
+  } catch (error) {
+    // Отказ провайдера модели — внешний API, а не база: по таблице ошибок
+    // контракта §2 это `upstream_error` (502), а не `upstream_unavailable`.
+    if (
+      error instanceof ModelUnavailableError ||
+      error instanceof ModelTimeoutError
+    ) {
+      return errorResponse(502, "upstream_error", error.message);
+    }
     return errorResponse(503, "upstream_unavailable", "Песочница недоступна");
   }
 }
