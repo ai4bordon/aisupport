@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closePool } from "@/db/pool";
+import { POST } from "@/app/api/chat/route";
 import { runAgent } from "@/core/run";
 import {
   createHttpModelClient,
@@ -24,6 +25,12 @@ const TENANT_SLUG = "test-core-runtime-safety";
 
 const ARTICLE_TEXT =
   "Электронная лицензия предоставляется в течение 120 минут после оплаты.";
+
+/** Тестовые данные клиента: настоящих персональных данных здесь нет. */
+const CLIENT_EMAIL = "ivanov@example.test";
+const CLIENT_NAME = "Иван Иванович Иванов";
+/** Чужое персональное значение: его в ответе быть не должно. */
+const LEAKED_EMAIL = "petrov@example.test";
 
 let tenantId = "";
 let conversationId = "";
@@ -381,5 +388,129 @@ describe("сериализация состояния диалога", () => {
     // Следующая операция получает блокировку: предыдущая её отпустила.
     const value = await withDialogLock(conversationId, async () => "свободно");
     expect(value).toBe("свободно");
+  });
+});
+
+describe("веб-чат: инварианты персональных данных", () => {
+  beforeAll(async () => {
+    process.env.SESSION_SECRET ??= "test-session-secret-not-a-real-key";
+    await ensureSchema();
+  });
+
+  beforeEach(async () => {
+    process.env.ESCALATION_MODE = "on";
+    process.env.TENANT_SLUG = TENANT_SLUG;
+    await seedConversation();
+  });
+
+  afterAll(async () => {
+    await closePool();
+  });
+
+  /** Запрос к веб-чату с тестовыми персональными данными клиента. */
+  function chatRequest(body: unknown): Request {
+    return new Request("http://localhost/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("в модель уходит только замаскированный текст, а трасса не содержит исходных значений", async () => {
+    const requests: ModelRequest[] = [];
+    setModelClient({
+      complete: async (request: ModelRequest): Promise<ModelResult> => {
+        requests.push(request);
+        const isClassification = request.messages.some((message) =>
+          message.content.includes("класс обращения"),
+        );
+        return {
+          text: isClassification ? "howto" : ARTICLE_TEXT,
+          amounts: [],
+          citations: isClassification ? [] : [ARTICLE_TEXT],
+          tokensIn: 10,
+          tokensOut: 5,
+          costRub: 0.1,
+          model: "stub-model",
+        };
+      },
+    });
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "3a1b2c3d-1111-4111-8111-111111111111",
+        message: {
+          client_message_id: "3a1b2c3d-2222-4222-8222-222222222222",
+          text: `Меня зовут ${CLIENT_NAME}, почта ${CLIENT_EMAIL}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+
+    // В модель уходят только метки: исходных значений в запросах нет.
+    const seen = requests
+      .flatMap((request) => request.messages.map((message) => message.content))
+      .join("\n");
+    expect(seen).toContain("⟦");
+    expect(seen).not.toContain(CLIENT_EMAIL);
+    expect(seen).not.toContain(CLIENT_NAME);
+
+    // В трассе исходных значений нет: ни в метаданных шагов, ни в тексте
+    // источников.
+    const steps = await testPool().query<{ metadata: Record<string, unknown> }>(
+      "SELECT metadata FROM agent_steps WHERE conversation_id = $1",
+      ["3a1b2c3d-1111-4111-8111-111111111111"],
+    );
+    const serialized = JSON.stringify(steps.rows);
+    expect(serialized).not.toContain(CLIENT_EMAIL);
+    expect(serialized).not.toContain(CLIENT_NAME);
+  });
+
+  it("ответ с необработанным персональным данным даёт 422 и не записывается как отправленный ответ", async () => {
+    // Модель возвращает чужое персональное значение: оно не должно уйти
+    // клиенту и не должно оказаться в переписке как отправленный ответ.
+    setModelClient(okModel(`Свяжитесь с ${LEAKED_EMAIL}`));
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "3a1b2c3d-3333-4333-8333-333333333333",
+        message: {
+          client_message_id: "3a1b2c3d-4444-4444-8444-444444444444",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("approval_required");
+
+    // Ответ агента не записан в переписку: наружу он не отправлен.
+    const agentMessages = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM messages WHERE conversation_id = $1 AND role = 'agent'",
+      ["3a1b2c3d-3333-4333-8333-333333333333"],
+    );
+    expect(Number(agentMessages.rows[0]?.count ?? "0")).toBe(0);
+  });
+
+  it("ответ с разрешённым значением клиента доходит до клиента", async () => {
+    // Клиент назвал свой адрес сам: после восстановления это его же
+    // значение, а не утечка, и ответ отправляется.
+    setModelClient(okModel(`Ответ на почту ⟦EMAIL_1⟧`));
+
+    const response = await POST(
+      chatRequest({
+        conversation_id: "3a1b2c3d-5555-4555-8555-555555555555",
+        message: {
+          client_message_id: "3a1b2c3d-6666-4666-8666-666666666666",
+          text: `Моя почта ${CLIENT_EMAIL}, как получить лицензию?`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { answer: { text: string } | null };
+    expect(body.answer?.text).toContain(CLIENT_EMAIL);
   });
 });

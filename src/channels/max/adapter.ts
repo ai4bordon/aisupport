@@ -6,6 +6,7 @@ import type {
   MaxStatus,
   MaxUpdate,
   NormalizedMessage,
+  OutgoingCheckPort,
   RestorePort,
   ShadowQueuePort,
 } from "./types";
@@ -89,6 +90,14 @@ export type MaxAdapterOptions = {
   mask?: MaskPort;
   /** Порт восстановления меток ПД в ответе. */
   restore?: RestorePort;
+  /**
+   * Порт проверки исходящего текста на необработанные персональные данные.
+   *
+   * Проверяется восстановленный текст: клиент законно получает свои же
+   * данные обратно, а любое новое персональное значение в ответе — утечка.
+   * Ответ, не прошедший проверку, клиенту не отправляется.
+   */
+  checkOutgoing?: OutgoingCheckPort;
   /** Состояние канала между перезапусками (маркер, последнее событие). */
   state?: MaxChannelStateStore;
   logger?: MaxLogger;
@@ -239,6 +248,24 @@ export async function handleMaxUpdate(
   let text = outcome.answer.text;
   if (current.options.restore) {
     text = await current.options.restore(text, message.conversationId);
+  }
+
+  // Исходящая проверка: ответ с необработанными персональными данными
+  // клиенту не отправляется. Восстановленные значения клиента утечкой не
+  // считаются — их проверяет сам порт по таблице соответствий диалога.
+  if (current.options.checkOutgoing) {
+    const allowed = await current.options.checkOutgoing(
+      text,
+      message.conversationId,
+    );
+    if (!allowed) {
+      current.logger.warn(
+        current.log(
+          `MAX: ответ не прошёл проверку на персональные данные и не отправлен клиенту для сообщения ${message.messageId}`,
+        ),
+      );
+      return message.messageId;
+    }
   }
 
   await sendWithRateLimit(current, chatId, text);

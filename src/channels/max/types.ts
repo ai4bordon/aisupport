@@ -132,6 +132,22 @@ export type ShadowQueueRecord = {
 /** Порт записи результата в очередь менеджера. */
 export type ShadowQueuePort = (record: ShadowQueueRecord) => Promise<string>;
 
+/**
+ * Порт проверки исходящего текста на необработанные персональные данные.
+ *
+ * Проверка идёт по восстановленному тексту: клиент законно получает свои
+ * же данные обратно, но любое новое персональное значение в ответе — утечка,
+ * и такой ответ наружу не уходит.
+ *
+ * Порт возвращает `true`, когда текст можно отправлять. Без порта текст
+ * уходит как есть: правила проверки живут в ядре (`src/core/validate.ts`),
+ * канал их не дублирует.
+ */
+export type OutgoingCheckPort = (
+  text: string,
+  conversationId: string,
+) => boolean | Promise<boolean>;
+
 /** Состояние подключения канала — `docs/api-contract.md` §0.3 (MaxStatus). */
 export type MaxStatus = {
   running: boolean;
