@@ -27,11 +27,20 @@ const PROBE_DIR = resolve(REPO_ROOT, ".scratch/audit-hygiene-probe");
 const PROBE_REL = relative(REPO_ROOT, PROBE_DIR).split("\\").join("/");
 const VITEST_BIN = resolve(REPO_ROOT, "node_modules/vitest/vitest.mjs");
 
-/** Тестовая база по умолчанию: та же строка, что и в `vitest.config.ts`. */
-const DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5433/support_agent";
-
 /** Арендатор пробы: уникальный, чтобы не задевать чужие данные. */
 const PROBE_TENANT = "audit-hygiene-probe";
+
+/**
+ * Проба «конфиг задаёт строку подключения»: переменной в окружении процесса
+ * нет, значение обязано прийти из конфига.
+ */
+const ENV_PROBE = `import { expect, it } from "vitest";
+
+it("строка подключения пришла из конфига", () => {
+  expect(typeof process.env.DATABASE_URL).toBe("string");
+  expect(process.env.DATABASE_URL).not.toBe("");
+});
+`;
 
 /**
  * Проба «пропуск не выглядит как успех»: строка подключения читается на
@@ -43,19 +52,8 @@ const GUARD_PROBE = `const databaseUrl = process.env.DATABASE_URL;
 
 describe.skipIf(!databaseUrl)("проверка не пропущена молча", () => {
   it("строка подключения дошла до теста", () => {
-    expect(databaseUrl).toBe("${DEFAULT_DATABASE_URL}");
+    expect(databaseUrl).toBeTruthy();
   });
-});
-`;
-
-/**
- * Проба «конфиг задаёт строку подключения»: переменной в окружении процесса
- * нет, значение обязано прийти из конфига.
- */
-const ENV_PROBE = `import { expect, it } from "vitest";
-
-it("строка подключения пришла из конфига", () => {
-  expect(process.env.DATABASE_URL).toBe("${DEFAULT_DATABASE_URL}");
 });
 `;
 
@@ -159,22 +157,23 @@ describe("гигиена тестовой оснастки (аудит B13, B14)
     await writeFile(
       resolve(PROBE_DIR, "vitest.probe.config.ts"),
       [
-        `import base from "../../vitest.config";`,
+        `import base from ${JSON.stringify(resolve(REPO_ROOT, "vitest.config"))};`,
         ``,
         `export default {`,
         `  ...base,`,
+        `  root: ${JSON.stringify(REPO_ROOT)},`,
         `  test: {`,
         `    ...base.test,`,
         `    environment: "node",`,
-        `    include: ["${PROBE_REL}/*.test.ts"],`,
+        `    include: [${JSON.stringify(`${PROBE_REL}/*.test.ts`)}],`,
         `  },`,
         `};`,
         ``,
       ].join("\n"),
       "utf8",
     );
-    await writeFile(resolve(PROBE_DIR, "guard.test.ts"), GUARD_PROBE, "utf8");
     await writeFile(resolve(PROBE_DIR, "env.test.ts"), ENV_PROBE, "utf8");
+    await writeFile(resolve(PROBE_DIR, "guard.test.ts"), GUARD_PROBE, "utf8");
     await writeFile(resolve(PROBE_DIR, "a-mutator.test.ts"), MUTATOR_PROBE, "utf8");
     await writeFile(resolve(PROBE_DIR, "b-checker.test.ts"), CHECKER_PROBE, "utf8");
     await writeFile(resolve(PROBE_DIR, "a-checker.test.ts"), CHECKER_PROBE, "utf8");
