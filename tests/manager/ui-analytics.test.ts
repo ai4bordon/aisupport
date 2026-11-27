@@ -21,8 +21,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { GET } from "@/app/api/manager/analytics/route";
 import { AnalyticsClient } from "@/app/manager/analytics/analytics-client";
-import { verifyManagerCode } from "@/modules/access";
-import { buildManagerCookie } from "@/modules/access/session";
+import { verifyAccessCode } from "@/modules/access";
+import { buildAccessCookie } from "@/modules/access/session";
 import { closePool } from "@/db/pool";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
 
@@ -150,11 +150,13 @@ function mockAnalyticsResponse(payload: AnalyticsPayload = SAMPLE_PAYLOAD): void
 }
 
 async function managerCookie(): Promise<string> {
-  process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
+  // Код один на весь стенд: кабинет открывается той же cookie, что и чат
+  // (решение владельца от 28.11.2026).
+  process.env.ACCESS_CODE = MANAGER_CODE;
   process.env.SESSION_SECRET = SESSION_SECRET;
-  const session = await verifyManagerCode(MANAGER_CODE);
-  if (!session) throw new Error("Не удалось создать сессию менеджера");
-  return buildManagerCookie(session).split(";")[0] ?? "";
+  const session = await verifyAccessCode(MANAGER_CODE);
+  if (!session) throw new Error("Не удалось создать сессию доступа");
+  return buildAccessCookie(session).split(";")[0] ?? "";
 }
 
 /**

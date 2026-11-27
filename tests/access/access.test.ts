@@ -191,26 +191,23 @@ describe("код доступа и подписанная cookie", () => {
     expect(readAccessSession(`${COOKIE_NAME}=${value}`)).toBeNull();
   });
 
-  it("не пускает в кабинет менеджера без кода менеджера", async () => {
-    process.env.MANAGER_ACCESS_CODE = "manager-code-11";
-
-    expect(await verifyManagerCode("not-the-manager-code")).toBeNull();
-
-    const session = await verifyManagerCode("manager-code-11");
-    expect(session).not.toBeNull();
-
-    const managerCookie = `${MANAGER_COOKIE_NAME}=${signAccessSession(
-      session as AccessSession,
-    )}`;
-    expect(readManagerSession(managerCookie)).not.toBeNull();
-
+  it("кабинет открывается тем же кодом, что и чат стенда", async () => {
+    // Решение владельца от 28.11.2026: для демо один код и один вход.
+    // Раздельные коды заводим позже, когда стенд возьмёт заказчик.
     const standSession = await verifyAccessCode(TEST_CODE);
-    expect(
-      readManagerSession(`${COOKIE_NAME}=${signAccessSession(standSession as AccessSession)}`),
-    ).toBeNull();
+    expect(standSession).not.toBeNull();
 
-    const decision = await checkManagerAccess({ cookieHeader: managerCookie });
+    const standCookie = `${COOKIE_NAME}=${signAccessSession(
+      standSession as AccessSession,
+    )}`;
+
+    const decision = await checkManagerAccess({ cookieHeader: standCookie });
     expect(decision.allowed).toBe(true);
+  });
+
+  it("не пускает в кабинет без кода вообще", async () => {
+    const decision = await checkManagerAccess({ cookieHeader: null });
+    expect(decision.allowed).toBe(false);
   });
 
   it("отзывает код менеджера при его смене", async () => {

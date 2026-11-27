@@ -344,15 +344,19 @@ describe("08 — настройки агента, песочница, истор
   });
 });
 
-/** Cookie менеджера: подписанная сессия кабинета. */
+/**
+ * Cookie кабинета: подписанная сессия доступа.
+ *
+ * Код один на весь стенд: кабинет открывается той же cookie, что и чат
+ * (решение владельца от 28.11.2026).
+ */
 async function managerCookie(): Promise<string> {
-  const { signAccessSession, verifyManagerCode } = await import(
+  const { signAccessSession, verifyAccessCode } = await import(
     "@/modules/access/session"
   );
-  process.env.MANAGER_CODE = "integration-manager-08";
-  process.env.MANAGER_ACCESS_CODE = "integration-manager-08";
+  process.env.ACCESS_CODE = "integration-manager-08";
   process.env.SESSION_SECRET = "integration-secret-08";
-  const session = await verifyManagerCode("integration-manager-08");
-  if (!session) throw new Error("Сессия менеджера не выдана");
-  return `support_manager=${signAccessSession(session)}`;
+  const session = await verifyAccessCode("integration-manager-08");
+  if (!session) throw new Error("Сессия доступа не выдана");
+  return `support_access=${signAccessSession(session)}`;
 }

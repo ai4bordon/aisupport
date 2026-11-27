@@ -10,10 +10,8 @@ import {
   rejectArticleDraft,
 } from "@/modules/article-drafts";
 import {
-  MANAGER_COOKIE_NAME,
   signAccessSession,
   verifyAccessCode,
-  verifyManagerCode,
 } from "@/modules/access/session";
 import { POST as createDraftRoute } from "@/app/api/kb/drafts/route";
 import { POST as approveDraftRoute } from "@/app/api/kb/drafts/[id]/approve/route";
@@ -130,17 +128,15 @@ function memoryModel(): ModelClient {
 const MANAGER_CODE = "manager-code-04";
 const ACCESS_CODE = "stand-code-04";
 
-/** Значение cookie менеджера: подписанная сессия кабинета. */
+/**
+ * Значение cookie кабинета.
+ *
+ * Код один на весь стенд: кабинет открывается той же cookie, что и чат
+ * (решение владельца от 28.11.2026).
+ */
 async function managerCookie(): Promise<string> {
-  const session = await verifyManagerCode(MANAGER_CODE);
-  if (!session) throw new Error("Сессия менеджера не выдана");
-  return `${MANAGER_COOKIE_NAME}=${signAccessSession(session)}`;
-}
-
-/** Значение клиентской cookie стенда: в кабинет менеджера она не пускает. */
-async function standCookie(): Promise<string> {
   const session = await verifyAccessCode(ACCESS_CODE);
-  if (!session) throw new Error("Сессия стенда не выдана");
+  if (!session) throw new Error("Сессия доступа не выдана");
   return `support_access=${signAccessSession(session)}`;
 }
 
@@ -477,7 +473,7 @@ describe("04 — черновики статей из материалов ди�
     expect(articleSource?.location).toBe(`диалог ${dialog.conversationId}`);
   });
 
-  it("AC4: HTTP-маршрут черновиков отделён от документов и закрыт барьером менеджера", async () => {
+  it("AC4: HTTP-маршрут черновиков отделён от документов и закрыт барьером доступа", async () => {
     const dialog = await seedDialog();
     const cookie = await managerCookie();
 
@@ -502,24 +498,7 @@ describe("04 — черновики статей из материалов ди�
     );
     expect(afterAnonymous.rows[0]?.count).toBe(before.rows[0]?.count);
 
-    // Только клиентская cookie стенда — тоже 401: кабинет менеджера
-    // требует отдельного кода (R17).
-    const standOnly = await createDraftRoute(
-      draftRequest(
-        "/api/kb/drafts",
-        {
-          conversation_id: dialog.conversationId,
-          source_message_ids: dialog.messageIds,
-          source_excerpt: "Квота обновления лицензии продлевается автоматически",
-          title: "Продление квоты лицензии",
-          body_md: ARTICLE_BODY,
-        },
-        await standCookie(),
-      ),
-    );
-    expect(standOnly.status).toBe(401);
-
-    // Сессия менеджера: 201 и статус ожидания.
+    // Сессия доступа: 201 и статус ожидания.
     const created = await createDraftRoute(
       draftRequest(
         "/api/kb/drafts",

@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  buildAccessCookie,
-  buildManagerCookie,
-  currentManagerCode,
-  verifyAccessCode,
-  verifyManagerCode,
-} from "@/modules/access/session";
+import { buildAccessCookie, verifyAccessCode } from "@/modules/access/session";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
@@ -26,12 +20,13 @@ function errorResponse(status: number, code: string, message: string): Response 
 /**
  * Тело запроса входа.
  *
- * `manager: true` — вход в кабинет менеджера: выдаётся отдельная cookie
- * `support_manager`. Без флага — вход на стенд, cookie `support_access`.
+ * Код один — `ACCESS_CODE`, и одна cookie `support_access` на весь стенд:
+ * чат, MAX и кабинет менеджера. Раздельные коды для клиента и менеджера
+ * заводить позже, когда заказчик возьмёт стенд (решение владельца
+ * от 28.11.2026).
  */
 type AccessPayload = {
   code: string;
-  manager: boolean;
 };
 
 /**
@@ -45,25 +40,22 @@ async function readPayload(request: Request): Promise<AccessPayload | null> {
   const contentType = request.headers.get("content-type") ?? "";
 
   if (contentType.includes("application/json")) {
-    let parsed: unknown;
+    let body: unknown;
     try {
-      parsed = await request.json();
+      body = await request.json();
     } catch {
       return null;
     }
-    if (typeof parsed !== "object" || parsed === null) {
+    // Тело запроса — внешние данные: код вычитывается через проверку типа,
+    // а не через утверждение о форме.
+    if (typeof body !== "object" || body === null || !("code" in body)) {
       return null;
     }
-    const record = parsed as Record<string, unknown>;
-    const code = record.code;
-    const manager = record.manager;
+    const code = body.code;
     if (typeof code !== "string" || code.length === 0) {
       return null;
     }
-    if (manager !== undefined && typeof manager !== "boolean") {
-      return null;
-    }
-    return { code, manager: manager === true };
+    return { code };
   }
 
   let form: FormData;
@@ -76,11 +68,7 @@ async function readPayload(request: Request): Promise<AccessPayload | null> {
   if (typeof code !== "string" || code.length === 0) {
     return null;
   }
-  const manager = form.get("manager");
-  if (manager !== null && manager !== "true" && manager !== "on") {
-    return null;
-  }
-  return { code, manager: manager === "true" || manager === "on" };
+  return { code };
 }
 
 /**
@@ -90,42 +78,14 @@ async function readPayload(request: Request): Promise<AccessPayload | null> {
  * времени и в ответе не возвращается. Код и его отпечаток не попадают ни в
  * cookie, ни в тело ответа, ни в журнал.
  *
- * Для кабинета менеджера код сверяется с `MANAGER_ACCESS_CODE` — отдельным
- * кодом; если он в окружении не задан, кабинет закрыт (`403 forbidden`).
+ * Cookie одна на весь стенд: `support_access` открывает и чат, и кабинет
+ * менеджера. Отдельный код менеджера (ADR-0017) для демо не нужен —
+ * решение владельца от 28.11.2026.
  */
 export async function POST(request: Request): Promise<Response> {
   const payload = await readPayload(request);
   if (!payload) {
     return errorResponse(400, "validation_error", "Ожидается code: JSON или форма");
-  }
-
-  if (payload.manager) {
-    if (currentManagerCode() === null) {
-      return errorResponse(
-        403,
-        "forbidden",
-        "Кабинет менеджера недоступен: код менеджера не задан",
-      );
-    }
-
-    const managerSession = await verifyManagerCode(payload.code);
-    if (!managerSession) {
-      return errorResponse(401, "unauthorized", "Код доступа менеджера не принят");
-    }
-
-    return new Response(
-      JSON.stringify({
-        session_id: managerSession.sessionId,
-        expires_at: new Date(managerSession.expiresAt).toISOString(),
-      }),
-      {
-        status: 200,
-        headers: {
-          ...JSON_HEADERS,
-          "set-cookie": buildManagerCookie(managerSession),
-        },
-      },
-    );
   }
 
   const session = await verifyAccessCode(payload.code);

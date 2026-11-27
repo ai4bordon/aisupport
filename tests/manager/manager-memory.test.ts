@@ -13,10 +13,9 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { POST as rememberRoute } from "@/app/api/manager/queue/remember/route";
 import { POST as chatRoute } from "@/app/api/chat/route";
 import {
-  MANAGER_COOKIE_NAME,
+  ACCESS_COOKIE_NAME,
   signAccessSession,
   verifyAccessCode,
-  verifyManagerCode,
 } from "@/modules/access/session";
 import { setModelClient } from "@/core/model";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
@@ -43,11 +42,18 @@ beforeAll(async () => {
   tenantId = await resetTenant(TENANT_SLUG);
 });
 
-/** Значение cookie менеджера: подписанная сессия кабинета. */
+/**
+ * Значение cookie кабинета.
+ *
+ * Код один на весь стенд: кабинет открывается той же cookie, что и чат
+ * (решение владельца от 28.11.2026).
+ */
 async function managerCookie(): Promise<string> {
-  const session = await verifyManagerCode(MANAGER_CODE);
-  if (!session) throw new Error("Сессия менеджера не выдана");
-  return `${MANAGER_COOKIE_NAME}=${signAccessSession(session)}`;
+  // Код один на весь стенд: кабинет открывается той же cookie, что и чат
+  // (решение владельца от 28.11.2026).
+  const session = await verifyAccessCode(ACCESS_CODE);
+  if (!session) throw new Error("Сессия доступа не выдана");
+  return `${ACCESS_COOKIE_NAME}=${signAccessSession(session)}`;
 }
 
 /** Значение клиентской cookie стенда. */

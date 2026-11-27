@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getTenantId } from "@/db/tenant";
-import { readManagerSession } from "@/modules/access";
+import { readAccessSession } from "@/modules/access";
 import { listTestSessions } from "@/modules/agent-settings";
 
 /**
@@ -25,7 +25,7 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 export async function GET(request: Request): Promise<Response> {
-  if (readManagerSession(request.headers.get("cookie") ?? undefined) === null) {
+  if (readAccessSession(request.headers.get("cookie") ?? undefined) === null) {
     return errorResponse(401, "unauthorized", "Кабинет менеджера закрыт: нужен код менеджера");
   }
 

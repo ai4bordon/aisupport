@@ -38,8 +38,11 @@ export function AccessForm() {
 
       if (response.ok) {
         setStatus("ok");
-        setMessage("Доступ выдан. Можно открывать чат стенда.");
+        setMessage("Доступ выдан. Открываю экран демо…");
         form.reset();
+        // Переход на экран демо: ждать, пока клиент сам нажмёт ссылку,
+        // не нужно — после входа кода человек пришёл именно за стендом.
+        window.location.assign("/start");
         return;
       }
 

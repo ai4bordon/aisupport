@@ -7,8 +7,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/manager/queue/route";
 import { QueueClient } from "@/app/manager/queue/queue-client";
-import { verifyManagerCode } from "@/modules/access";
-import { buildManagerCookie } from "@/modules/access/session";
+import { verifyAccessCode } from "@/modules/access";
+import { buildAccessCookie } from "@/modules/access/session";
 import { closePool } from "@/db/pool";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
 
@@ -143,11 +143,13 @@ function mockQueueResponse(payload: QueuePayload = samplePayload): void {
 }
 
 async function managerCookie(): Promise<string> {
-  process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
+  // Код один на весь стенд: кабинет открывается той же cookie, что и чат
+  // (решение владельца от 28.11.2026).
+  process.env.ACCESS_CODE = MANAGER_CODE;
   process.env.SESSION_SECRET = SESSION_SECRET;
-  const session = await verifyManagerCode(MANAGER_CODE);
-  if (!session) throw new Error("Не удалось создать сессию менеджера");
-  return buildManagerCookie(session).split(";")[0] ?? "";
+  const session = await verifyAccessCode(MANAGER_CODE);
+  if (!session) throw new Error("Не удалось создать сессию доступа");
+  return buildAccessCookie(session).split(";")[0] ?? "";
 }
 
 async function seedQueueData(): Promise<{

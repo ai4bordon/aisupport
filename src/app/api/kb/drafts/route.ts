@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { checkManagerAccess, accessHttpStatus, readManagerSession } from "@/modules/access";
+import { checkManagerAccess, accessHttpStatus, readAccessSession } from "@/modules/access";
 import { getTenantId } from "@/db/tenant";
 import {
   approveAndPublishArticleDraft,
@@ -78,8 +78,8 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     const tenantId = await getTenantId();
-    // Автор материала — сессия менеджера: тело запроса автора не подменяет.
-    const session = readManagerSession(request.headers.get("cookie"));
+    // Автор материала — сессия доступа: тело запроса автора не подменяет.
+    const session = readAccessSession(request.headers.get("cookie"));
     const draft = await createArticleDraft({
       tenantId,
       actor: session?.sessionId ?? "manager",

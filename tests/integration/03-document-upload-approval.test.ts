@@ -12,7 +12,7 @@ import { search, setEmbeddingProvider, type EmbeddingProvider } from "@/modules/
 import { GET as searchRoute } from "@/app/api/kb/search/route";
 import { POST as uploadRoute } from "@/app/api/kb/documents/route";
 import { POST as approveRoute } from "@/app/api/kb/documents/[id]/approve/route";
-import { signAccessSession, verifyManagerCode } from "@/modules/access/session";
+import { signAccessSession, verifyAccessCode } from "@/modules/access/session";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
 
 import { buildDocx, buildPdf, buildZip } from "../knowledge/document-fixtures";
@@ -114,11 +114,11 @@ function emptyModel(): ModelClient {
  * окружения, и cookie, собранная вручную, барьер не пройдёт.
  */
 async function issueManagerCookie(): Promise<string> {
-  const session = await verifyManagerCode(MANAGER_CODE);
+  const session = await verifyAccessCode(MANAGER_CODE);
   if (session === null) {
     throw new Error("Код менеджера не принят: сессию кабинета не выдать");
   }
-  return `support_manager=${signAccessSession(session)}`;
+  return `support_access=${signAccessSession(session)}`;
 }
 
 describe("03 — загрузка, индексация и утверждение документов базы знаний", () => {
@@ -131,7 +131,7 @@ describe("03 — загрузка, индексация и утверждени�
     await ensureSchema();
     documentsDir = await mkdtemp(join(tmpdir(), "kb-upload-integration-"));
     process.env.KB_DOCUMENTS_DIR = documentsDir;
-    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
+    process.env.ACCESS_CODE = MANAGER_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
     setEmbeddingProvider(deterministicProvider);
   });

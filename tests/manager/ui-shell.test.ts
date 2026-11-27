@@ -407,7 +407,7 @@ describe("шлюз доступа к кабинету", () => {
     expect(screen.queryByRole("heading", { name: /требуется вход менеджера/i })).not.toBeInTheDocument();
   });
 
-  it("каркас читает менеджерскую cookie через барьер доступа", () => {
+  it("каркас читает cookie доступа через барьер доступа", () => {
     const layout = readFileSync(resolve(MANAGER_DIR, "layout.tsx"), "utf8");
 
     expect(layout).toContain("checkManagerAccess");
@@ -423,7 +423,7 @@ describe("страница входа менеджера", () => {
     navState.pushed = [];
   });
 
-  it("отправляет код менеджера JSON-телом на /api/access и не логирует его", async () => {
+  it("отправляет код доступа JSON-телом на /api/access и не логирует его", async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -453,9 +453,8 @@ describe("страница входа менеджера", () => {
 
     const body = JSON.parse(String(init.body)) as { code?: string; manager?: boolean };
     expect(body.code).toBe("manager-secret-code");
-    // Режим входа в кабинет: код сверяется с MANAGER_ACCESS_CODE,
-    // выдаётся отдельная cookie `support_manager`.
-    expect(body.manager).toBe(true);
+    // Код один на весь стенд: отдельного режима входа в кабинет нет.
+    expect(body.manager).toBeUndefined();
 
     const written = [logSpy, warnSpy, errorSpy, infoSpy]
       .flatMap((spy) => spy.mock.calls)

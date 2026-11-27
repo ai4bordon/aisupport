@@ -139,10 +139,11 @@ function ManagerFrame({ state }: { state: ManagerState }) {
     setPending(true);
     setError(null);
     try {
+      // Код один на весь стенд: он открывает и чат, и кабинет.
       const response = await fetch("/api/access", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: value, manager: true }),
+        body: JSON.stringify({ code: value }),
       });
 
       if (response.ok) {
@@ -151,10 +152,8 @@ function ManagerFrame({ state }: { state: ManagerState }) {
         return;
       }
 
-      if (response.status === 403) {
-        setError("Код менеджера на стенде не задан — кабинет пока закрыт.");
-      } else if (response.status === 401) {
-        setError("Код менеджера не принят. Проверьте код и попробуйте снова.");
+      if (response.status === 401) {
+        setError("Код не принят. Проверьте код и попробуйте снова.");
       } else {
         setError("Не удалось проверить код: сервер ответил кодом " + response.status + ".");
       }

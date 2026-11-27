@@ -6,12 +6,15 @@ import { ManagerButton } from "../components/managerButton";
 import { ManagerLoading } from "../components/managerLoading";
 
 /**
- * Вход в кабинет менеджера по коду менеджера (`MANAGER_ACCESS_CODE`).
+ * Вход в кабинет менеджера.
  *
- * Код не показывается в разметке и не пишется в журнал: он уходит JSON-телом
- * `{ code, manager: true }` на `/api/access`, где сверяется с кодом менеджера
- * на сервере и выдаётся отдельная cookie `support_manager`. В браузере
- * остаётся только подписанная cookie сессии.
+ * Код один на весь стенд — `ACCESS_CODE`: он открывает и чат, и кабинет
+ * (решение владельца от 28.11.2026). Раздельные коды заводим позже, когда
+ * стенд возьмёт заказчик.
+ *
+ * Код не показывается в разметке и не пишется в журнал: он уходит
+ * JSON-телом `{ code }` на `/api/access`, где сверяется на сервере. В
+ * браузере остаётся только подписанная cookie сессии.
  *
  * Состояния страницы явные: загрузка (проверка кода), ошибка (код не принят
  * или сервер недоступен) и переход в кабинет после успеха.
@@ -39,13 +42,11 @@ export default function ManagerLoginPage() {
     setError(null);
 
     try {
-      // `manager: true` — режим входа в кабинет менеджера: код сверяется с
-      // MANAGER_ACCESS_CODE и выдаётся отдельная cookie `support_manager`.
-      // Клиентский код стенда по этому пути не принимается (R17).
+      // Код один на весь стенд: он открывает и чат, и кабинет.
       const response = await fetch("/api/access", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: value, manager: true }),
+        body: JSON.stringify({ code: value }),
       });
 
       if (!response.ok) {

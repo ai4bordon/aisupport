@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getTenantId } from "@/db/tenant";
-import { readManagerSession } from "@/modules/access";
+import { readAccessSession } from "@/modules/access";
 
 import {
   describeCapabilities,
@@ -40,7 +40,7 @@ function errorResponse(status: number, code: string, message: string): Response 
  * не пускает.
  */
 function managerAllowed(request: Request): boolean {
-  return readManagerSession(request.headers.get("cookie") ?? undefined) !== null;
+  return readAccessSession(request.headers.get("cookie") ?? undefined) !== null;
 }
 
 /** Текущая версия конфигурации и реестр возможностей. */

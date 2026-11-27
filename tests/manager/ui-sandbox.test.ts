@@ -8,8 +8,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { GET as historyGet } from "@/app/api/settings/history/route";
 import { POST as sandboxPost } from "@/app/api/settings/sandbox/route";
 import { SandboxClient } from "@/app/manager/sandbox/sandbox-client";
-import { verifyManagerCode } from "@/modules/access";
-import { buildManagerCookie } from "@/modules/access/session";
+import { verifyAccessCode } from "@/modules/access";
+import { buildAccessCookie } from "@/modules/access/session";
 import { closePool } from "@/db/pool";
 import { ensureSchema, resetTenant, testPool } from "../db/helpers";
 
@@ -326,11 +326,11 @@ describe("маршруты данных песочницы", () => {
 
   beforeAll(async () => {
     await ensureSchema();
-    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
+    process.env.ACCESS_CODE = MANAGER_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
-    const session = await verifyManagerCode(MANAGER_CODE);
+    const session = await verifyAccessCode(MANAGER_CODE);
     if (!session) throw new Error("Не удалось создать сессию менеджера");
-    cookie = buildManagerCookie(session).split(";")[0] ?? "";
+    cookie = buildAccessCookie(session).split(";")[0] ?? "";
     await clearSliceTables(TENANT_SLUG);
     tenantId = await resetTenant(TENANT_SLUG);
   });

@@ -10,7 +10,7 @@ import {
   updateSetting,
 } from "@/modules/agent-settings";
 import SettingsPage, { metadata } from "@/app/settings/page";
-import { signAccessSession, verifyManagerCode } from "@/modules/access/session";
+import { signAccessSession, verifyAccessCode } from "@/modules/access/session";
 import { ensureSliceDatabase } from "./helpers";
 
 /**
@@ -42,10 +42,15 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-/** Значение cookie менеджера: подписанная сессия кабинета. */
+/**
+ * Значение cookie кабинета: подписанная сессия доступа.
+ *
+ * Код один на весь стенд: кабинет открывается той же cookie, что и чат
+ * (решение владельца от 28.11.2026).
+ */
 async function managerCookieValue(): Promise<string> {
-  const session = await verifyManagerCode(MANAGER_CODE);
-  if (!session) throw new Error("Сессия менеджера не выдана");
+  const session = await verifyAccessCode(MANAGER_CODE);
+  if (!session) throw new Error("Сессия доступа не выдана");
   return signAccessSession(session);
 }
 
@@ -54,11 +59,8 @@ describe("реестр возможностей и кабинет настрое
 
   beforeAll(async () => {
     tenantId = await ensureSliceDatabase(TENANT_SLUG);
-    // Имя переменной с кодом менеджера различалось в срезах
-    // (`MANAGER_CODE` и `MANAGER_ACCESS_CODE`): задаются обе, чтобы тест
-    // работал и на ветке среза, и на слитом `main`.
-    process.env.MANAGER_CODE = MANAGER_CODE;
-    process.env.MANAGER_ACCESS_CODE = MANAGER_CODE;
+    // Код один на весь стенд: он открывает и чат, и кабинет.
+    process.env.ACCESS_CODE = MANAGER_CODE;
     process.env.SESSION_SECRET = SESSION_SECRET;
     process.env.TENANT_SLUG = TENANT_SLUG;
   });
@@ -66,10 +68,10 @@ describe("реестр возможностей и кабинет настрое
   beforeEach(async () => {
     tenantId = await ensureSliceDatabase(TENANT_SLUG);
     process.env.TENANT_SLUG = TENANT_SLUG;
-    // Кабинет открыт по умолчанию: cookie менеджера подставляется, чтобы
+    // Кабинет открыт по умолчанию: cookie доступа подставляется, чтобы
     // проверялась сама форма. Тест закрытого кабинета снимает cookie сам.
     (globalThis as { __sl08Cookies?: CookieStore }).__sl08Cookies = new Map([
-      ["support_manager", await managerCookieValue()],
+      ["support_access", await managerCookieValue()],
     ]);
   });
 

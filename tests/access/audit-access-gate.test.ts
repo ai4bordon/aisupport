@@ -740,47 +740,41 @@ describe("A2/A3 — барьер доступа и лимиты стенда п�
   });
 
   describe("A3 — кабинет менеджера", () => {
-    it("не пускает в кабинет без кода менеджера", async () => {
-      const response = await postAccess({ code: TEST_CODE, manager: true });
-
-      // Код стенда в кабинет менеджера не подходит (R17).
-      expect(response.status).toBe(401);
-      expect(response.headers.get("set-cookie")).toBeNull();
-    });
-
-    it("не пускает в кабинет, если MANAGER_ACCESS_CODE не задан", async () => {
-      delete process.env.MANAGER_ACCESS_CODE;
-
-      const response = await postAccess({ code: TEST_MANAGER_CODE, manager: true });
-
-      expect(response.status).toBe(403);
-      const body = await response.json();
-      expect(body.error.code).toBe("forbidden");
-      expect(response.headers.get("set-cookie")).toBeNull();
-    });
-
-    it("выдаёт отдельную cookie кабинета по коду менеджера", async () => {
-      const response = await postAccess({ code: TEST_MANAGER_CODE, manager: true });
+    it("кабинет открывается тем же кодом, что и чат стенда", async () => {
+      // Решение владельца от 28.11.2026: для демо один код и один вход.
+      // Раздельные коды заводим позже, когда стенд возьмёт заказчик.
+      const response = await postAccess({ code: TEST_CODE });
 
       expect(response.status).toBe(200);
       const setCookie = response.headers.get("set-cookie") as string;
-      expect(setCookie).toContain(`${MANAGER_COOKIE}=`);
-      // Cookie стенда кабинету не подходит.
-      expect(access.readManagerSession(`${ACCESS_COOKIE}=${cookieValue(setCookie)}`)).toBeNull();
+      expect(setCookie).toContain(`${ACCESS_COOKIE}=`);
 
-      const session = access.readManagerSession(
-        `${MANAGER_COOKIE}=${cookieValue(setCookie)}`,
+      const session = access.readAccessSession(
+        `${ACCESS_COOKIE}=${cookieValue(setCookie)}`,
       );
       expect(session).not.toBeNull();
     });
 
-    it("не пускает в кабинет по cookie стенда", async () => {
+    it("не пускает в кабинет без кода", async () => {
+      const response = await postAccess({ code: "not-the-code" });
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get("set-cookie")).toBeNull();
+    });
+
+    it("не пускает в кабинет без cookie", async () => {
+      const decision = await access.checkManagerAccess({ cookieHeader: null });
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toBe("missing_code");
+    });
+
+    it("пускает в кабинет по cookie стенда", async () => {
       const accessCookie = await issueAccessCookie();
 
       const decision = await access.checkManagerAccess({ cookieHeader: accessCookie });
 
-      expect(decision.allowed).toBe(false);
-      expect(decision.reason).toBe("missing_code");
+      expect(decision.allowed).toBe(true);
     });
   });
 });

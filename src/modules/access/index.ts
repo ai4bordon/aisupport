@@ -129,18 +129,22 @@ export async function checkAccess(request: AccessRequest): Promise<AccessDecisio
 /**
  * Барьер кабинета менеджера.
  *
- * Кабинет требует отдельного кода менеджера поверх общего кода стенда:
- * cookie стенда в кабинет не пускает (R17).
+ * Кабинет открыт той же cookie `support_access`, что и чат стенда: для демо
+ * один код и один вход. Раздельные коды заводим позже, когда стенд возьмёт
+ * заказчик (решение владельца от 28.11.2026).
+ *
+ * Лимиты запросов и диалогов здесь не проверяются: маршруты кабинета
+ * читают данные, а не ведут диалог с клиентом.
  */
 export async function checkManagerAccess(
   request: ManagerRequest,
 ): Promise<AccessDecision> {
   const cookieHeader = request.cookieHeader ?? null;
-  const raw = readCookieValue(cookieHeader, MANAGER_COOKIE_NAME);
+  const raw = readCookieValue(cookieHeader, ACCESS_COOKIE_NAME);
   if (!raw) {
     return { allowed: false, reason: "missing_code", retryAfterSeconds: null };
   }
-  if (!readManagerSession(cookieHeader)) {
+  if (!readAccessSession(cookieHeader)) {
     return { allowed: false, reason: "invalid_code", retryAfterSeconds: null };
   }
   return { allowed: true, reason: "ok", retryAfterSeconds: null };

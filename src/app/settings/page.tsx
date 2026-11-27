@@ -14,7 +14,7 @@ import {
   type CapabilityDescriptor,
 } from "@/modules/agent-settings";
 import { getTenantId } from "@/db/tenant";
-import { MANAGER_COOKIE_NAME, readManagerSession } from "@/modules/access";
+import { ACCESS_COOKIE_NAME, readAccessSession } from "@/modules/access";
 import { SettingsForm } from "./form";
 
 /**
@@ -46,9 +46,9 @@ export const metadata: Metadata = {
  * состояние элемента управления в интерфейсе и в API не может разойтись.
  */
 export default async function SettingsPage() {
-  const cookieHeader = (await cookies()).get(MANAGER_COOKIE_NAME)?.value;
-  const session = readManagerSession(
-    cookieHeader === undefined ? undefined : `${MANAGER_COOKIE_NAME}=${cookieHeader}`,
+  const cookieHeader = (await cookies()).get(ACCESS_COOKIE_NAME)?.value;
+  const session = readAccessSession(
+    cookieHeader === undefined ? undefined : `${ACCESS_COOKIE_NAME}=${cookieHeader}`,
   );
   if (session === null) {
     return (
