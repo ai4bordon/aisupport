@@ -142,30 +142,49 @@ export function parseProductName(rawName: string, vendor: string | null): Parsed
     name = name.replace(bracket[0], " ").trim();
   }
 
-  // Количество в хвосте: «…, 50» или «… на 50 ПК».
+  // Количество в хвосте: «…, 50», «…, 50 пользователей» или «… на 50 ПК».
+  // Слово после числа тоже убирается: иначе в названии оставался хвост
+  // «, 50 пользователей», а количество дублировалось ещё и в отдельном поле.
   let quantityText: string | null = null;
-  const tail = name.match(/,\s*(\d+)\s*$/u);
+  const tail = name.match(
+    /,\s*(\d+)\s*(?:пользовател[\p{L}\p{N}]*|пк|шт[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|лицензи[\p{L}\p{N}]*)?\s*$/iu,
+  );
   if (tail?.[1] !== undefined) {
     quantityText = tail[1];
     name = name.replace(tail[0], "").trim();
   } else {
-    const inline = name.match(/\s+на\s+(\d+)\s+(?:ПК|пк|пользовател\w*|мест\w*|устройств\w*)\s*$/u);
+    const inline = name.match(
+      /\s+на\s+(\d+)\s+(?:ПК|пк|пользовател[\p{L}\p{N}]*|мест[\p{L}\p{N}]*|устройств[\p{L}\p{N}]*)\s*$/iu,
+    );
     if (inline?.[1] !== undefined) {
       quantityText = inline[1];
       name = name.replace(inline[0], "").trim();
     }
   }
 
-  // Оборот «на 1 год» без скобок — тоже редакция.
-  if (edition === null) {
-    const term = name.match(/\s+(на\s+\d+\s+(?:год|лет|месяц\w*)\s*(?:с\s+подпиской\s+на\s+обновления\s+на\s+\d+\s+\w+)?)\s*$/iu);
-    if (term?.[1] !== undefined) {
-      edition = term[1].trim();
-      name = name.replace(term[0], "").trim();
-    }
+  // Оборот «на 1 год» — редакция. В фиде он иногда повторяется («на 1 год
+  // на 1 год»), поэтому все обороты срока убираются из названия, а в
+  // редакцию попадает первый.
+  const term = name.match(
+    /\s+(на\s+\d+\s+(?:год|лет|месяц[\p{L}\p{N}]*))\s*(?:с\s+подпиской\s+на\s+обновления\s+на\s+\d+\s+\w+)?\s*$/iu,
+  );
+  if (term?.[1] !== undefined && edition === null) {
+    edition = term[1].trim();
   }
+  name = name
+    .replace(/\s+на\s+\d+\s+(?:год|лет|месяц[\p{L}\p{N}]*)/giu, "")
+    .trim();
 
-  return { name: name.replace(/\s{2,}/gu, " ").trim(), edition, quantityText };
+  return {
+    // Пробелы перед знаками препинания и двоеточие после названия — мусор
+    // фида: в ответе это читалось как «Netwin SurgeMail , 50 пользователей».
+    name: name
+      .replace(/\s+([,;:])/gu, "$1")
+      .replace(/\s{2,}/gu, " ")
+      .trim(),
+    edition,
+    quantityText,
+  };
 }
 
 /** Найденная позиция каталога вместе с данными для ответа. */

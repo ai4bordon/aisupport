@@ -5,6 +5,7 @@ import {
   extractProductQuery,
   extractSlots,
   lookupCatalog,
+  parseProductName,
   type RequirementSlots,
 } from "@/core/catalog-lookup";
 import { loadSlots, saveSlots } from "@/core/slots";
@@ -297,6 +298,27 @@ describe("подбор по каталогу (R1a/R1b)", () => {
     expect(slots.budget).toBe("нет");
     expect(slots.deployment).toBe("сервер");
     expect(slots.termMonths).toBeNull();
+  });
+
+  it("название позиции разбирается на название, редакцию и количество", () => {
+    // Регрессия: в ответе читалось «Netwin SurgeMail , 50 пользователей» и
+    // «Dr.Web …, лицензия на 1 год» — хвосты фида висели в имени, а
+    // количество дублировалось ещё и в отдельном поле.
+    const netwin = parseProductName(
+      "Netwin Ltd. Netwin SurgeMail (лицензия + Anti Virus + Spam + Mirror), 50 пользователей",
+      "Netwin Ltd.",
+    );
+    expect(netwin.name).toBe("Netwin SurgeMail");
+    expect(netwin.edition).toBe("лицензия + Anti Virus + Spam + Mirror");
+    expect(netwin.quantityText).toBe("50");
+
+    const drweb = parseProductName(
+      "Доктор Веб Dr.Web Gateway Security Suite, Антивирус + Центр Управления лицензия на 1 год на 1 год на 50 ПК",
+      "Доктор Веб",
+    );
+    expect(drweb.name).toBe("Dr.Web Gateway Security Suite, Антивирус + Центр Управления лицензия");
+    expect(drweb.edition).toBe("на 1 год");
+    expect(drweb.quantityText).toBe("50");
   });
 
   it("подбор по задаче не возвращает позиции вне домена", async () => {
