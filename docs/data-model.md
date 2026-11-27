@@ -293,15 +293,23 @@
 | `tenant_id` | uuid | FK, not null |
 | `title` | text | not null |
 | `body_md` | text | not null |
-| `status` | text | not null; `draft`, `published`, `rejected` |
+| `status` | text | not null; `draft`, `pending_review`, `approved`, `published`, `rejected` |
 | `version` | integer | not null, default 1 |
 | `valid_from` | timestamptz | not null |
 | `valid_to` | timestamptz | null |
 | `owner` | text | null |
 | `created_at` | timestamptz | not null, default now() |
 | `approved_at` | timestamptz | null |
+| `conversation_id` | uuid | FK `conversations`, null; исходный диалог материала |
+| `source_message_ids` | jsonb | not null, default `'[]'::jsonb`; сообщения диалога, вошедшие в материал |
+| `source_excerpt` | text | null; выдержка из исходного материала |
+| `approved_by` | text | null; менеджер, принявший решение |
+| `reviewed_at` | timestamptz | null; время решения менеджера |
+| `published_at` | timestamptz | null; с этого момента статья доступна поиску |
 
-Индекс: `(tenant_id, status, valid_from, valid_to)`.
+Индекс: `(tenant_id, status, valid_from, valid_to)`; `(tenant_id, status, created_at DESC)` — очередь проверки материалов.
+
+Состояния: `pending_review` — материал собран из диалога и ждёт решения менеджера, в поиск не попадает; `approved` — менеджер одобрил, публикация ещё не выполнена, в поиск не попадает; `published` — доступна поиску базы знаний; `rejected` — решение принято, материал не используется; `draft` — служебное состояние.
 
 ### 3.16 `templates`
 
