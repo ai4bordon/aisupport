@@ -195,6 +195,14 @@ function DraftModal({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [editing, saving, onClose]);
 
+  // Материал изменился (правка сохранена или обновлён другим менеджером):
+  // окно возвращается к просмотру и показывает новый текст. Иначе после
+  // сохранения менеджер остался бы в редакторе со старым текстом в поле.
+  useEffect(() => {
+    setText(draft.body_md);
+    setEditing(false);
+  }, [draft.body_md, draft.version]);
+
   return (
     <div
       className="kn-modal-backdrop"

@@ -104,10 +104,17 @@ function mockFetch(options: { draftStatus?: number; deleted?: boolean } = {}): M
         });
       }
       if (method === "PUT") {
-        return new Response(JSON.stringify(draftPayload), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        // Сервер отвечает сохранённым материалом: новый текст и новая
+        // версия. Иначе окно осталось бы со старым содержимым.
+        const sent = JSON.parse(String(init?.body ?? "{}")) as {
+          body_md?: string;
+        };
+        return new Response(
+          JSON.stringify({
+            draft: { ...draftPayload.draft, body_md: sent.body_md ?? draftPayload.draft.body_md, version: 2 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
       return new Response(JSON.stringify(draftPayload), {
         status: options.draftStatus ?? 200,
@@ -228,6 +235,24 @@ describe("модалка черновика статьи", () => {
     expect((put?.[1] as RequestInit).body).toBe(
       JSON.stringify({ body_md: "Новый текст статьи.", version: 1 }),
     );
+  });
+
+  it("после сохранения возвращает окно к просмотру с новым текстом", async () => {
+    // Иначе менеджер остался бы в редакторе со старым текстом в поле.
+    const fetchMock = mockFetch();
+    await openModal();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Изменить/i }));
+    const editor = await screen.findByRole("textbox", { name: /текст статьи/i });
+    fireEvent.change(editor, { target: { value: "Новый текст статьи." } });
+    fireEvent.click(screen.getByRole("button", { name: /Сохранить/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("textbox", { name: /текст статьи/i })).not.toBeInTheDocument();
+    });
+    // Кнопки просмотра вернулись, редактор закрыт.
+    expect(screen.getByRole("button", { name: /Изменить/i })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(true);
   });
 
   it("не закрывает окно с несохранённой правкой без подтверждения", async () => {
