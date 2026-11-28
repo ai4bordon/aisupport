@@ -309,6 +309,30 @@
   color: var(--sl-text);
 }
 
+/* Ответ песочницы приходит с разметкой и разбирается общим модулем
+   `@/app/components/markdown`: абзацы, списки, заголовки и цитаты.
+   Без этих правил список в ответе слипался с соседним текстом. */
+.sl-agent-sandbox-answer > :first-child {
+  margin-top: 0;
+}
+
+.sl-agent-sandbox-answer > :last-child {
+  margin-bottom: 0;
+}
+
+.sl-agent-sandbox-answer ul,
+.sl-agent-sandbox-answer ol {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-5);
+}
+
+.sl-agent-sandbox-answer blockquote {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-3);
+  border-left: 3px solid var(--sl-divider);
+  color: var(--sl-text-secondary);
+}
+
 /* Идёт запрос: во время прогона видно текст ожидания, а не только
    заблокированную кнопку. */
 .sl-agent-running {

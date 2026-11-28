@@ -7,6 +7,9 @@ import {
   ManagerErrorState,
   ManagerLoading,
 } from "@/app/manager/components";
+// Общий модуль разметки: виджет, песочница и страница агента показывают
+// ответ одинаково. Второго рендерера не появляется.
+import { Markdown } from "@/app/components/markdown";
 // Тип берётся из модуля настроек: свой дубликат разошёлся бы с реестром
 // возможностей при правке модуля. Импорт только типа — в браузер модуль не
 // попадает (он тянет драйвер базы).
@@ -726,7 +729,9 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
 
         {sandbox.kind === "done" ? (
           <div className="sl-agent-sandbox-result">
-            <p className="sl-agent-sandbox-answer">{sandbox.result.answer}</p>
+            <div className="sl-agent-sandbox-answer">
+              <Markdown source={sandbox.result.answer} />
+            </div>
             <p className="sl-agent-note">
               Оценка: {GRADE_LABELS[sandbox.result.grade] ?? sandbox.result.grade}
               {" · "}

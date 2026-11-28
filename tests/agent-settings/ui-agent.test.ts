@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within, type RenderResult } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { AgentClient } from "@/app/manager/agent/agent-client";
@@ -276,8 +276,8 @@ function mockApi(options: ApiOptions = {}): Mock<(input: unknown, init?: Request
   return fetchMock;
 }
 
-function renderAgent(): void {
-  render(createElement(AgentClient, { defaultPrompt: DEFAULT_PROMPT }));
+function renderAgent(): RenderResult {
+  return render(createElement(AgentClient, { defaultPrompt: DEFAULT_PROMPT }));
 }
 
 /** Запросы `PUT /api/settings`, сделанные тестом. */
@@ -624,6 +624,38 @@ describe("песочница, история и аудит", () => {
     const body = JSON.parse(String(init?.body ?? "{}")) as { text?: string };
     expect(body.text).toBe("Какие условия лицензирования?");
     expect(await screen.findByText("Ответ песочницы.")).toBeInTheDocument();
+  });
+
+  it("показывает ответ песочницы через общий модуль разметки", async () => {
+    // Ответ агента приходит с разметкой. Раньше он показывался сырым
+    // текстом, и в интерфейсе было видно `**жирный**` и незакрытые списки.
+    mockApi({
+      sandbox: {
+        ...SANDBOX_PAYLOAD,
+        answer: "Условия **важны**:\n- лицензия\n- договор",
+      },
+    });
+
+    const { container } = renderAgent();
+
+    const question = (await screen.findByLabelText("Вопрос для проверки")) as HTMLTextAreaElement;
+    fireEvent.change(question, { target: { value: "Какие условия лицензирования?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Запустить в песочнице" }));
+
+    const result = await waitFor(() => {
+      const node = container.querySelector(".sl-agent-sandbox-answer");
+      expect(node).not.toBeNull();
+      return node as HTMLElement;
+    });
+    const block = within(result);
+    // Жирный фрагмент стал элементом, а не текстом с маркерами.
+    expect(block.getByText("важны").tagName).toBe("STRONG");
+    // Список стал настоящим списком с пунктами.
+    const list = block.getByRole("list");
+    expect(within(list).getByText("лицензия").tagName).toBe("LI");
+    expect(within(list).getByText("договор").tagName).toBe("LI");
+    // Сырых маркеров разметки в тексте не осталось.
+    expect(result.textContent).not.toContain("**");
   });
 
   it("показывает текст ожидания во время прогона песочницы", async () => {

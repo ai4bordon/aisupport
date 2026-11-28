@@ -114,10 +114,39 @@
   font-size: 14px;
 }
 
+/* Ответ песочницы разбирается общим модулем `@/app/components/markdown`:
+   абзацы, списки, заголовки и цитаты. Прежние `white-space: pre-wrap`
+   держали разметку как сырой текст и после перехода на модуль только
+   мешали — блочные элементы разметку уже несут сами. */
 .sandbox-result__answer {
   margin: 0 0 var(--sl-space-3);
-  white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.sandbox-result__answer > :first-child,
+.sandbox-history__answer > :first-child {
+  margin-top: 0;
+}
+
+.sandbox-result__answer > :last-child,
+.sandbox-history__answer > :last-child {
+  margin-bottom: 0;
+}
+
+.sandbox-result__answer ul,
+.sandbox-result__answer ol,
+.sandbox-history__answer ul,
+.sandbox-history__answer ol {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-5);
+}
+
+.sandbox-result__answer blockquote,
+.sandbox-history__answer blockquote {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-3);
+  border-left: 3px solid var(--sl-divider);
+  color: var(--sl-text-secondary);
 }
 
 .sandbox-meta,
