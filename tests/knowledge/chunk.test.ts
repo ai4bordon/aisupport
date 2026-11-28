@@ -225,6 +225,38 @@ describe("selectIndexableChunks", () => {
     expect(selectIndexableChunks(chunks)).toEqual([]);
   });
 
+  it("длинный заголовок не выдаёт материал без текста за содержательный", () => {
+    // Шапка чанка — две строки: адрес источника и заголовок. Если разбирать
+    // только первую строку, заголовок попадал бы в тело, и материал без
+    // текста проходил бы проверку длины за счёт своего заголовка.
+    const longTitle =
+      "Способы оплаты счетов в панели управления клиентом: оплата с баланса, банковским переводом и картой";
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/subscriptions/payment",
+      title: longTitle,
+      sectionPath: "Softline Подписки / Оплата подписки",
+      text: "",
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    // Заголовок длиннее порога, но содержательного текста за ним нет.
+    expect(longTitle.length).toBeGreaterThan(40);
+    expect(selectIndexableChunks(chunks)).toEqual([]);
+  });
+
+  it("тело длиной ровно в порог попадает в индекс", () => {
+    const body = "я".repeat(40);
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/subscriptions/payment",
+      title: "Оплата подписки",
+      sectionPath: "Softline Подписки / Оплата подписки",
+      text: body,
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    expect(selectIndexableChunks(chunks)).toHaveLength(1);
+  });
+
   it("пустой список чанков не даёт ошибку", () => {
     expect(selectIndexableChunks([])).toEqual([]);
   });

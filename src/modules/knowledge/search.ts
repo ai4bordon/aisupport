@@ -272,12 +272,13 @@ type ChunkRow = {
   page_no: number | null;
   score: number;
   /**
-   * Число терминов вопроса, совпавших с заголовком материала.
+   * Число терминов вопроса, совпавших с заголовком и путём раздела.
    *
-   * Заголовок — то, что клиент назвал своими словами: вопрос «Как оплатить
-   * подписку?» и заголовок «Способы оплаты заказа» говорят об одном и том
-   * же. Считается по `tsvector` заголовка, поэтому словоформы учитываются:
-   * «оплатить» и «оплаты» — одно слово.
+   * Заголовок и путь — это то, что клиент назвал своими словами: вопрос
+   * «Как оплатить подписку?» и материал «Способы оплаты заказа» из
+   * раздела «Оплата подписки» говорят об одном и том же. Считается по
+   * `tsvector`, поэтому словоформы учитываются: «оплатить» и «оплаты» —
+   * одно слово.
    */
   title_hits: number;
 };
@@ -389,15 +390,17 @@ export async function search(
       c.text,
       c.page_no,
       1 - (c.embedding <=> $2::vector) AS score,
-      -- Совпадения терминов вопроса с заголовком: считается по tsvector
-      -- заголовка, поэтому словоформы учитываются.
+      -- Совпадения терминов вопроса с заголовком и путём раздела: считается
+      -- по tsvector, поэтому словоформы учитываются.
       (SELECT count(*)::int
          FROM unnest($6::text[]) AS term
-        WHERE to_tsvector('russian', COALESCE(a.title, d.filename)) @@ plainto_tsquery('russian', term)
+        WHERE to_tsvector('russian', COALESCE(a.title, d.filename) || ' ' || COALESCE(src.section_path, ''))
+              @@ plainto_tsquery('russian', term)
       ) AS title_hits
     FROM kb_chunks c
     LEFT JOIN kb_articles a ON a.id = c.article_id
     LEFT JOIN kb_documents d ON d.id = c.document_id
+    LEFT JOIN kb_sources src ON src.id = c.article_id
     WHERE c.tenant_id = $1
       AND c.embedding_model = $5
       AND ${PUBLISHED_SOURCE_PREDICATE}
@@ -449,11 +452,13 @@ export async function search(
         ts_rank(c.search_vector, to_tsquery('russian', $2)) AS score,
         (SELECT count(*)::int
            FROM unnest($4::text[]) AS term
-          WHERE to_tsvector('russian', COALESCE(a.title, d.filename)) @@ plainto_tsquery('russian', term)
+          WHERE to_tsvector('russian', COALESCE(a.title, d.filename) || ' ' || COALESCE(src.section_path, ''))
+                @@ plainto_tsquery('russian', term)
         ) AS title_hits
       FROM kb_chunks c
       LEFT JOIN kb_articles a ON a.id = c.article_id
       LEFT JOIN kb_documents d ON d.id = c.document_id
+      LEFT JOIN kb_sources src ON src.id = c.article_id
       WHERE c.tenant_id = $1
         AND c.search_vector @@ to_tsquery('russian', $2)
         AND ${PUBLISHED_SOURCE_PREDICATE}
