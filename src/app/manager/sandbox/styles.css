@@ -8,6 +8,16 @@
   background: var(--sl-bg);
   color: var(--sl-text);
   font-family: var(--sl-font-sans);
+  /* Отступы входят в ширину: иначе раздел шириной 390px становился бы
+     шире экрана на величину отступов. */
+  box-sizing: border-box;
+}
+
+/* Ширина 390px: раздел не выходит за экран, горизонтального скролла нет. */
+.sandbox-page *,
+.sandbox-page *::before,
+.sandbox-page *::after {
+  box-sizing: border-box;
 }
 
 .sandbox-header {
@@ -45,6 +55,9 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sl-space-4);
   align-items: start;
+  /* Ширина колонок не превышает ширину экрана: содержимое не распирает
+     сетку на узком экране. */
+  max-width: 100%;
 }
 
 .sandbox-form {
@@ -63,6 +76,7 @@
 .sandbox-question {
   box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   resize: vertical;
   padding: var(--sl-space-3);
   border: 1px solid var(--sl-divider);
@@ -103,10 +117,39 @@
   font-size: 14px;
 }
 
+/* Ответ песочницы разбирается общим модулем `@/app/components/markdown`:
+   абзацы, списки, заголовки и цитаты. Прежние `white-space: pre-wrap`
+   держали разметку как сырой текст и после перехода на модуль только
+   мешали — блочные элементы разметку уже несут сами. */
 .sandbox-result__answer {
   margin: 0 0 var(--sl-space-3);
-  white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.sandbox-result__answer > :first-child,
+.sandbox-history__answer > :first-child {
+  margin-top: 0;
+}
+
+.sandbox-result__answer > :last-child,
+.sandbox-history__answer > :last-child {
+  margin-bottom: 0;
+}
+
+.sandbox-result__answer ul,
+.sandbox-result__answer ol,
+.sandbox-history__answer ul,
+.sandbox-history__answer ol {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-5);
+}
+
+.sandbox-result__answer blockquote,
+.sandbox-history__answer blockquote {
+  margin: var(--sl-space-2) 0;
+  padding-left: var(--sl-space-3);
+  border-left: 3px solid var(--sl-divider);
+  color: var(--sl-text-secondary);
 }
 
 .sandbox-meta,
@@ -152,6 +195,7 @@
   border: 1px solid var(--sl-divider);
   border-radius: var(--sl-radius);
   background: var(--sl-surface);
+  min-width: 0;
 }
 
 .sandbox-history__top {
@@ -161,17 +205,21 @@
   gap: var(--sl-space-2);
   color: var(--sl-text-secondary);
   font-size: 12px;
+  /* Длинный идентификатор сессии не должен распирать карточку. */
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__question {
   margin: var(--sl-space-2) 0 0;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__answer {
   margin: var(--sl-space-1) 0 var(--sl-space-2);
   color: var(--sl-text-secondary);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__repeat {
@@ -198,8 +246,26 @@
   outline-offset: 2px;
 }
 
+@media (max-width: 640px) {
+  .sandbox-page {
+    padding: var(--sl-space-3);
+  }
+
+  .sandbox-header h1 {
+    font-size: 22px;
+  }
+
+  /* Кнопка проверки на всю ширину: на узком экране она должна быть
+     достижима большим пальцем. */
+  .sandbox-actions .sl-m-button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 960px) {
   .sandbox-layout {
-    grid-template-columns: 1fr;
+    /* `minmax(0, 1fr)`, а не `1fr`: иначе ширина карточки определяется
+       содержимым и раздел уезжает за узкий экран. */
+    grid-template-columns: minmax(0, 1fr);
   }
 }
