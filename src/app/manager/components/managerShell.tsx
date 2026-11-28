@@ -66,6 +66,12 @@ export function ManagerShell({ children }: { children: ReactNode }) {
                   </li>
                 );
               })}
+              {/* Журнал изменений настроек: его видно прямо в кабинете. */}
+              <li className="sl-m-nav__item">
+                <Link className="sl-m-nav__link" href="/manager/audit">
+                  <span className="sl-m-nav__label">Аудит</span>
+                </Link>
+              </li>
               {/* Обратно на стенд: из кабинета уйти было некуда, кроме
                   адресной строки. Для жюри это тупик. */}
               <li className="sl-m-nav__item">
