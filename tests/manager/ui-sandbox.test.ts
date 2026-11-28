@@ -50,6 +50,24 @@ function findRepoRoot(): string {
 
 const REPO_ROOT = findRepoRoot();
 
+/**
+ * Отложенное разрешение прогона песочницы.
+ *
+ * `Promise.withResolvers` есть в Node 22, но библиотека типов проекта
+ * объявлена как ES2023, поэтому конструктор приводится явно: обход типов
+ * локальный и не трогает конфигурацию сборки.
+ */
+function deferredGate(): { promise: Promise<void>; release: () => void } {
+  const constructor = Promise as unknown as {
+    withResolvers: <T>() => {
+      promise: Promise<T>;
+      resolve: (value: T) => void;
+    };
+  };
+  const { promise, resolve } = constructor.withResolvers<void>();
+  return { promise, release: () => resolve() };
+}
+
 /** Арендатор и код менеджера тестового файла: свои значения на файл. */
 const TENANT_SLUG = "test-manager-ui-sandbox";
 const MANAGER_CODE = "test-manager-code-ui-sandbox";
@@ -225,6 +243,16 @@ describe("бренд-разметка раздела песочницы", () => 
     expect(styles).toContain(":focus-visible");
     expect(styles).toMatch(/outline:\s*(?!none)/);
   });
+
+  it("в стилях раздела нет фиксированной ширины и есть правила для узкого экрана", async () => {
+    const styles = await readFile(
+      resolve(REPO_ROOT, "src/app/manager/sandbox/styles.css"),
+      "utf8",
+    );
+    expect(styles).not.toMatch(/min-width:\s*\d+px/);
+    expect(styles).toMatch(/box-sizing:\s*border-box/);
+    expect(styles).toMatch(/overflow-wrap:\s*anywhere/);
+  });
 });
 
 describe("состояния раздела песочницы", () => {
@@ -297,6 +325,50 @@ describe("состояния раздела песочницы", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("Вопрос для проверки")).toHaveValue("Какие условия по договору?");
     });
+  });
+
+  it("показывает текст ожидания во время прогона, а не только заблокированную кнопку", async () => {
+    const gate = deferredGate();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : (input as Request).url;
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (method === "POST" && url.includes("/api/settings/sandbox")) {
+          await gate.promise;
+          return new Response(JSON.stringify(sandboxResponse), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(historyPayload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(createElement(SandboxClient));
+    await screen.findByText("Ответ прошлой сессии");
+    fireEvent.change(screen.getByLabelText("Вопрос для проверки"), {
+      target: { value: "Какие условия по договору?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Проверить" }));
+
+    // Во время прогона видно текст ожидания.
+    expect(
+      await screen.findByText(/Запрос отправлен в песочницу — ждём ответ агента/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Проверяем…" })).toBeDisabled();
+
+    gate.release();
+    expect(await screen.findByText("Ответ агента из песочницы")).toBeInTheDocument();
+    expect(screen.queryByText(/Запрос отправлен в песочницу/)).toBeNull();
   });
 
   it("переносит вопрос в поле песочницы и очищает прежнюю ошибку запроса", async () => {

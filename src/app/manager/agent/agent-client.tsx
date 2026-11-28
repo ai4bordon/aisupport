@@ -29,8 +29,16 @@ import type { CapabilityDescriptor } from "@/modules/agent-settings";
  *
  * Форма собирается из реестра возможностей, а не из ручного списка полей:
  * состояние элемента управления в интерфейсе и в API не может разойтись.
- * Нереализованные элементы управления отключены и подписаны причиной —
- * цвет не единственный носитель смысла.
+ *
+ * Схема сохранения одна на весь раздел: поля только правятся, а применение
+ * делает единственная кнопка «Сохранить» в панели сверху. Пока изменения не
+ * сохранены, панель прямо пишет «Есть несохранённые изменения» — молчащая
+ * кнопка без признака оставила бы менеджера в догадках, применён его правки
+ * или нет.
+ *
+ * Нереализованные элементы управления (supported: false) собраны в один
+ * свёрнутый блок «В следующих версиях»: они не занимают весь экран, но
+ * причина отключения у каждого остаётся видна.
  */
 
 /**
@@ -117,7 +125,7 @@ const PROMPT_KEY = "system_prompt";
 /** Ключ режима тени: единственный источник — `tenants.shadow_mode`. */
 const SHADOW_KEY = "shadow_mode";
 
-/** Оценка тестовой сессии: человекочитаемная подпись. */
+/** Оценка тестовой сессии: человекочитаемая подпись. */
 const GRADE_LABELS: Record<string, string> = {
   ok: "подтверждён",
   no_confirmed_source: "нет подтверждённого источника",
@@ -182,6 +190,22 @@ function settingValue(key: string, raw: string): string | number {
   return raw;
 }
 
+/**
+ * Ключи, значения которых отличаются от сохранённых.
+ *
+ * Ключ считается изменённым, только если сервер его отдавал: поле, которого
+ * нет в сохранённой конфигурации, сохранять нельзя — запрос уйдёт с
+ * неизвестным ключом.
+ */
+function changedKeysOf(
+  values: Record<string, string>,
+  savedValues: Record<string, string>,
+): string[] {
+  return Object.keys(values).filter(
+    (key) => savedValues[key] !== undefined && values[key] !== savedValues[key],
+  );
+}
+
 export type AgentClientProps = {
   /** Стандартный системный промпт: цель кнопки сброса. */
   defaultPrompt: string;
@@ -201,10 +225,15 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const [auditError, setAuditError] = useState<string | null>(null);
 
+  /** Значения полей формы: то, что менеджер видит и правит. */
   const [values, setValues] = useState<Record<string, string>>({});
-  const [savingKey, setSavingKey] = useState<string | null>(null);
+  /** Значения, которые сервер уже сохранил: с ними сравнивается форма. */
+  const [savedValues, setSavedValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** Результат действия над формой, не связанного с сохранением. */
+  const [promptNotice, setPromptNotice] = useState<string | null>(null);
 
   const [sandboxText, setSandboxText] = useState("");
   const [sandbox, setSandbox] = useState<SandboxState>({ kind: "idle" });
@@ -224,14 +253,16 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
         }
         const payload = (await response.json()) as SettingsPayload;
         setSettings(payload);
-        setValues({
+        const loaded = {
           provider: payload.provider,
           model: payload.model,
           endpoint: payload.endpoint,
           system_prompt: payload.system_prompt,
           temperature: String(payload.temperature),
           max_tokens: String(payload.max_tokens),
-        });
+        };
+        setValues(loaded);
+        setSavedValues(loaded);
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === "AbortError") {
           return;
@@ -291,12 +322,25 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
     return () => controller.abort();
   }, []);
 
-  const saveSetting = useCallback(
-    async (key: string, raw: string): Promise<void> => {
-      setSavingKey(key);
-      setSaveMessage(null);
-      setSaveError(null);
-      try {
+  /**
+   * Сохранение всех изменённых настроек одной кнопкой.
+   *
+   * `PUT /api/settings` принимает одну настройку за раз, поэтому изменённые
+   * ключи сохраняются по очереди. Уже сохранённые ключи перестают считаться
+   * изменёнными сразу — если запрос упал на середине, видно, что именно
+   * осталось несохранённым.
+   */
+  const saveChanges = useCallback(async (): Promise<void> => {
+    const changed = changedKeysOf(values, savedValues);
+    if (changed.length === 0 || saving) {
+      return;
+    }
+    setSaving(true);
+    setSaveMessage(null);
+    setSaveError(null);
+    try {
+      for (const key of changed) {
+        const raw = values[key] ?? "";
         const response = await fetch("/api/settings", {
           method: "PUT",
           headers: { "content-type": "application/json" },
@@ -308,7 +352,7 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
         });
         if (!response.ok) {
           setSaveError(
-            await readError(response, "Настройку сохранить не удалось"),
+            await readError(response, "Настройки сохранить не удалось"),
           );
           return;
         }
@@ -318,15 +362,15 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             ? { ...current, version: payload.version }
             : current,
         );
-        setSaveMessage("Настройка сохранена");
-      } catch {
-        setSaveError("Сервер не ответил. Проверьте соединение и попробуйте снова.");
-      } finally {
-        setSavingKey(null);
+        setSavedValues((current) => ({ ...current, [key]: raw }));
       }
-    },
-    [],
-  );
+      setSaveMessage("Настройки сохранены");
+    } catch {
+      setSaveError("Сервер не ответил. Проверьте соединение и попробуйте снова.");
+    } finally {
+      setSaving(false);
+    }
+  }, [savedValues, saving, values]);
 
   const runSandbox = useCallback(async (): Promise<void> => {
     const text = sandboxText.trim();
@@ -363,6 +407,29 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
     setSandbox({ kind: "idle" });
     sandboxInputRef.current?.focus();
   }, []);
+
+  /**
+   * Сброс системного промпта к стандартному.
+   *
+   * Значение только ставится в форму: применение — отдельным действием
+   * «Сохранить». Менеджер видит об этом прямо из сообщения.
+   */
+  const resetPrompt = useCallback((): void => {
+    // Сброс меняет значение в форме, только если оно отличалось от
+    // стандартного: иначе сохранять нечего, и сообщение об этом честнее.
+    const wasChanged = values[PROMPT_KEY] !== defaultPrompt;
+    setValues((current) => ({
+      ...current,
+      [PROMPT_KEY]: defaultPrompt,
+    }));
+    setSaveMessage(null);
+    setSaveError(null);
+    setPromptNotice(
+      wasChanged
+        ? "Промпт сброшен к стандартному — сохраните, чтобы применить"
+        : "Промпт уже стандартный — сохранять нечего",
+    );
+  }, [defaultPrompt, values]);
 
   if (settingsError !== null) {
     return (
@@ -408,6 +475,12 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
       capability.key !== SHADOW_KEY,
   );
 
+  const changedKeys = changedKeysOf(values, savedValues);
+  const hasUnsaved = changedKeys.length > 0;
+  const saveState = hasUnsaved
+    ? "Есть несохранённые изменения"
+    : "Все изменения сохранены";
+
   return (
     <main className="sl-agent-page" aria-label="Настройки агента">
       <header className="sl-agent-header">
@@ -420,6 +493,38 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
         </p>
       </header>
 
+      <section className="sl-agent-savebar" aria-label="Сохранение настроек">
+        <div className="sl-agent-savebar__status">
+          <p className="sl-agent-savebar__state" role="status">
+            {saveState}
+          </p>
+          <p className="sl-agent-savebar__hint">
+            {hasUnsaved
+              ? `Изменено полей: ${changedKeys.length}. Нажмите «Сохранить», чтобы применить изменения.`
+              : "Поля соответствуют сохранённой конфигурации."}
+          </p>
+          {saveMessage !== null ? (
+            <p className="sl-agent-savebar__message">{saveMessage}</p>
+          ) : null}
+        </div>
+        <button
+          className="sl-agent-button sl-agent-button--primary"
+          type="button"
+          disabled={!hasUnsaved || saving}
+          onClick={() => {
+            void saveChanges();
+          }}
+        >
+          {saving ? "Сохраняем…" : "Сохранить"}
+        </button>
+      </section>
+
+      {saveError !== null ? (
+        <p className="sl-agent-error" role="alert">
+          {saveError}
+        </p>
+      ) : null}
+
       <ManagerCard
         id="agent-connection"
         title="Подключение к модели"
@@ -430,14 +535,10 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             key={capability.key}
             capability={capability}
             value={values[capability.key] ?? ""}
-            saveName={`Сохранить: ${capability.label.toLowerCase()}`}
-            disabled={savingKey !== null}
+            disabled={saving}
             onChange={(next) =>
               setValues((current) => ({ ...current, [capability.key]: next }))
             }
-            onSave={() => {
-              void saveSetting(capability.key, values[capability.key] ?? "");
-            }}
           />
         ))}
         <p className="sl-agent-note">
@@ -457,20 +558,13 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             value={values[promptCapability.key] ?? ""}
             multiline
             labelText="Текст системного промпта"
-            saveName="Сохранить системный промпт"
-            disabled={savingKey !== null}
+            disabled={saving}
             onChange={(next) =>
               setValues((current) => ({
                 ...current,
                 [promptCapability.key]: next,
               }))
             }
-            onSave={() => {
-              void saveSetting(
-                promptCapability.key,
-                values[promptCapability.key] ?? "",
-              );
-            }}
           />
         ) : (
           <p className="sl-agent-note">
@@ -481,15 +575,15 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
         <button
           className="sl-agent-button"
           type="button"
-          onClick={() =>
-            setValues((current) => ({
-              ...current,
-              [PROMPT_KEY]: defaultPrompt,
-            }))
-          }
+          onClick={resetPrompt}
         >
           Сбросить к стандартному
         </button>
+        {promptNotice !== null ? (
+          <p className="sl-agent-message" aria-live="polite">
+            {promptNotice}
+          </p>
+        ) : null}
       </ManagerCard>
 
       <ManagerCard
@@ -503,14 +597,10 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             capability={capability}
             value={values[capability.key] ?? ""}
             numeric
-            saveName={`Сохранить: ${capability.label.toLowerCase()}`}
-            disabled={savingKey !== null}
+            disabled={saving}
             onChange={(next) =>
               setValues((current) => ({ ...current, [capability.key]: next }))
             }
-            onSave={() => {
-              void saveSetting(capability.key, values[capability.key] ?? "");
-            }}
           />
         ))}
         {other.map((capability) => (
@@ -518,48 +608,42 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             key={capability.key}
             capability={capability}
             value={values[capability.key] ?? ""}
-            saveName={`Сохранить: ${capability.label.toLowerCase()}`}
-            disabled={savingKey !== null}
+            disabled={saving}
             onChange={(next) =>
               setValues((current) => ({ ...current, [capability.key]: next }))
             }
-            onSave={() => {
-              void saveSetting(capability.key, values[capability.key] ?? "");
-            }}
           />
         ))}
       </ManagerCard>
 
       <ManagerCard
-        id="agent-tools"
-        title="Инструменты"
-        description="Элементы управления, которые в проекте не реализованы."
+        id="agent-upcoming"
+        title="В следующих версиях"
+        description="Элементы управления, которые в проекте не реализованы. Пока ими пользоваться нельзя — причина указана у каждого."
       >
         {unsupported.length === 0 ? (
           <p className="sl-agent-note">Нереализованных элементов управления нет.</p>
         ) : (
-          unsupported.map((capability) => (
-            <div className="sl-agent-unsupported" key={capability.key}>
-              <div className="sl-agent-field">
-                <label className="sl-agent-label" htmlFor={`agent-${capability.key}`}>
-                  <span>{capability.label}</span>
-                </label>
-                <input
-                  className="sl-agent-input"
-                  id={`agent-${capability.key}`}
-                  data-capability={capability.key}
-                  type="text"
-                  value=""
-                  disabled
-                  readOnly
-                />
-              </div>
-              <p className="sl-agent-reason">
-                <span className="sl-agent-badge">не реализовано</span>{" "}
-                {capability.reason}
-              </p>
-            </div>
-          ))
+          <details className="sl-agent-upcoming">
+            <summary className="sl-agent-upcoming__summary">
+              {`Показать недоступные элементы (${unsupported.length})`}
+            </summary>
+            <ul className="sl-agent-upcoming__list">
+              {unsupported.map((capability) => (
+                <li
+                  className="sl-agent-upcoming__item"
+                  key={capability.key}
+                  data-capability-item={capability.key}
+                >
+                  <p className="sl-agent-upcoming__name">
+                    <span>{capability.label}</span>
+                    <span className="sl-agent-badge">не реализовано</span>
+                  </p>
+                  <p className="sl-agent-reason">{capability.reason}</p>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </ManagerCard>
 
@@ -629,7 +713,9 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
         </p>
 
         {sandbox.kind === "running" ? (
-          <ManagerLoading label="Запускаем песочницу" />
+          <p className="sl-agent-running" role="status">
+            Запрос отправлен в песочницу — ждём ответ агента…
+          </p>
         ) : null}
 
         {sandbox.kind === "failed" ? (
@@ -674,46 +760,59 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             description="Запустите вопрос в песочнице — сессия появится здесь."
           />
         ) : (
-          <table className="sl-agent-table">
-            <caption className="sl-agent-table__caption">
-              Последние тестовые сессии
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Версия</th>
-                <th scope="col">Оценка</th>
-                <th scope="col">Токены</th>
-                <th scope="col">Затраты</th>
-                <th scope="col">Модель</th>
-                <th scope="col">Вопрос</th>
-                <th scope="col">Действие</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((session) => (
-                <tr key={session.session_id}>
-                  <td>{session.settings_version}</td>
-                  <td>{GRADE_LABELS[session.result.grade] ?? session.result.grade}</td>
-                  <td>{`${session.tokens_in} / ${session.tokens_out}`}</td>
-                  <td>{formatCost(session.cost_rub)}</td>
-                  <td>{String(session.settings_snapshot["model"] ?? "—")}</td>
-                  <td>{session.request_text_masked}</td>
-                  <td>
-                    <button
-                      className="sl-agent-button"
-                      type="button"
-                      aria-label="Повторить тестовую сессию"
-                      onClick={() => {
-                        repeatSession(session.request_text_masked);
-                      }}
-                    >
-                      Повторить
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div
+              className="sl-agent-table-scroll"
+              role="region"
+              aria-label="Прокручиваемая таблица истории тестовых сессий"
+              tabIndex={0}
+            >
+              <table className="sl-agent-table">
+                <caption className="sl-agent-table__caption">
+                  Последние тестовые сессии
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Версия</th>
+                    <th scope="col">Оценка</th>
+                    <th scope="col">Токены</th>
+                    <th scope="col">Затраты</th>
+                    <th scope="col">Модель</th>
+                    <th scope="col">Вопрос</th>
+                    <th scope="col">Действие</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((session) => (
+                    <tr key={session.session_id}>
+                      <td>{session.settings_version}</td>
+                      <td>{GRADE_LABELS[session.result.grade] ?? session.result.grade}</td>
+                      <td>{`${session.tokens_in} / ${session.tokens_out}`}</td>
+                      <td>{formatCost(session.cost_rub)}</td>
+                      <td>{String(session.settings_snapshot["model"] ?? "—")}</td>
+                      <td>{session.request_text_masked}</td>
+                      <td>
+                        <button
+                          className="sl-agent-button"
+                          type="button"
+                          aria-label="Повторить тестовую сессию"
+                          onClick={() => {
+                            repeatSession(session.request_text_masked);
+                          }}
+                        >
+                          Повторить
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="sl-agent-note sl-agent-scroll-hint">
+              Таблицу можно прокручивать вбок: на узком экране колонки не
+              сжимаются и остаются читаемыми.
+            </p>
+          </>
         )}
       </ManagerCard>
 
@@ -735,51 +834,56 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
             description="Первая запись появится после сохранения настройки."
           />
         ) : (
-          <table className="sl-agent-table">
-            <caption className="sl-agent-table__caption">Последние изменения</caption>
-            <thead>
-              <tr>
-                <th scope="col">Кто</th>
-                <th scope="col">Что</th>
-                <th scope="col">До</th>
-                <th scope="col">После</th>
-                <th scope="col">Когда</th>
-              </tr>
-            </thead>
-            <tbody>
-              {audit.map((entry) => (
-                <tr key={entry.id}>
-                  <td>{entry.actor}</td>
-                  <td>{entry.key ?? entry.entity}</td>
-                  <td>{JSON.stringify(entry.before)}</td>
-                  <td>{JSON.stringify(entry.after)}</td>
-                  <td>{formatDate(entry.created_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div
+              className="sl-agent-table-scroll"
+              role="region"
+              aria-label="Прокручиваемая таблица аудита изменений"
+              tabIndex={0}
+            >
+              <table className="sl-agent-table">
+                <caption className="sl-agent-table__caption">Последние изменения</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Кто</th>
+                    <th scope="col">Что</th>
+                    <th scope="col">До</th>
+                    <th scope="col">После</th>
+                    <th scope="col">Когда</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {audit.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{entry.actor}</td>
+                      <td>{entry.key ?? entry.entity}</td>
+                      <td>{JSON.stringify(entry.before)}</td>
+                      <td>{JSON.stringify(entry.after)}</td>
+                      <td>{formatDate(entry.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="sl-agent-note sl-agent-scroll-hint">
+              Таблицу можно прокручивать вбок: на узком экране колонки не
+              сжимаются и остаются читаемыми.
+            </p>
+          </>
         )}
       </ManagerCard>
-
-      {saveMessage !== null ? (
-        <p className="sl-agent-message" role="status">
-          {saveMessage}
-        </p>
-      ) : null}
-      {saveError !== null ? (
-        <p className="sl-agent-error" role="alert">
-          {saveError}
-        </p>
-      ) : null}
     </main>
   );
 }
 
 /**
- * Поле настройки: подпись, элемент управления и кнопка сохранения.
+ * Поле настройки: подпись и элемент управления.
  *
  * Подпись связана с полем через `htmlFor`/`id`, а не обёрткой: иначе текст
  * кнопки попал бы в доступное имя поля.
+ *
+ * Кнопки сохранения у поля нет: применение изменений делает одна кнопка
+ * «Сохранить» в панели сверху раздела.
  */
 function AgentField({
   capability,
@@ -788,9 +892,7 @@ function AgentField({
   multiline = false,
   disabled = false,
   labelText,
-  saveName,
   onChange,
-  onSave,
 }: {
   capability: AgentCapability;
   value: string;
@@ -799,10 +901,7 @@ function AgentField({
   disabled?: boolean;
   /** Своя подпись поля, когда имя из реестра совпадает с заголовком блока. */
   labelText?: string;
-  /** Доступное имя кнопки сохранения. */
-  saveName: string;
   onChange: (value: string) => void;
-  onSave: () => void;
 }) {
   const inputId = `agent-${capability.key}`;
 
@@ -833,14 +932,6 @@ function AgentField({
           onChange={(event) => onChange(event.target.value)}
         />
       )}
-      <button
-        className="sl-agent-button"
-        type="button"
-        disabled={disabled}
-        onClick={onSave}
-      >
-        {saveName}
-      </button>
     </div>
   );
 }

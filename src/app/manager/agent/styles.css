@@ -13,6 +13,14 @@
   font-family: var(--sl-font-sans);
 }
 
+/* Ширина 390px: страница и её содержимое не выходят за экран, горизонтального
+   скролла в разделе нет. */
+.sl-agent-page *,
+.sl-agent-page *::before,
+.sl-agent-page *::after {
+  box-sizing: border-box;
+}
+
 .sl-agent-header {
   display: flex;
   flex-direction: column;
@@ -42,6 +50,48 @@
   color: var(--sl-text-secondary);
 }
 
+/* Панель сохранения: одна кнопка на весь раздел и явный признак
+   несохранённых изменений. */
+.sl-agent-savebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sl-space-3);
+  padding: var(--sl-space-3);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+}
+
+.sl-agent-savebar__status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+  min-width: 0;
+}
+
+.sl-agent-savebar__state {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--sl-text);
+}
+
+.sl-agent-savebar__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-savebar__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sl-text);
+}
+
 .sl-agent-field {
   display: flex;
   flex-direction: column;
@@ -58,6 +108,7 @@
 .sl-agent-input,
 .sl-agent-textarea {
   width: 100%;
+  max-width: 100%;
   padding: var(--sl-space-2);
   font-family: var(--sl-font-sans);
   font-size: 15px;
@@ -82,7 +133,8 @@
 .sl-agent-page a:focus-visible,
 .sl-agent-page button:focus-visible,
 .sl-agent-page input:focus-visible,
-.sl-agent-page textarea:focus-visible {
+.sl-agent-page textarea:focus-visible,
+.sl-agent-page summary:focus-visible {
   outline: 2px solid var(--sl-accent);
   outline-offset: 2px;
 }
@@ -137,15 +189,56 @@
   color: var(--sl-text);
 }
 
-.sl-agent-unsupported {
-  margin-bottom: var(--sl-space-3);
+/* Нереализованные элементы управления — свёрнуты в один блок
+   «В следующих версиях»: отдельные поля на весь экран не нужны, но причина
+   отключения у каждого остаётся видна. */
+.sl-agent-upcoming {
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
 }
 
-/* Нереализованный элемент управления: не только цвет, но и атрибут
-   `disabled` и текстовая пометка «не реализовано» — цвет не единственный
-   носитель смысла (R26). */
+.sl-agent-upcoming__summary {
+  padding: var(--sl-space-2) var(--sl-space-3);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sl-text-secondary);
+}
+
+.sl-agent-upcoming__list {
+  margin: 0;
+  padding: 0 var(--sl-space-3) var(--sl-space-3);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-3);
+}
+
+.sl-agent-upcoming__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-1);
+  padding-top: var(--sl-space-2);
+  border-top: 1px solid var(--sl-divider);
+}
+
+.sl-agent-upcoming__name {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+/* Нереализованный элемент управления: не только цвет, но и текстовая
+   пометка «не реализовано» — цвет не единственный носитель смысла (R26). */
 .sl-agent-reason {
-  margin: var(--sl-space-1) 0 0;
+  margin: 0;
   font-size: 13px;
   line-height: 1.5;
   color: var(--sl-text-muted);
@@ -161,6 +254,14 @@
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Таблица истории и аудита: на узком экране прокручивается внутри
+   ограниченного контейнера, страница целиком не разъезжается. */
+.sl-agent-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .sl-agent-table {
@@ -190,6 +291,10 @@
   color: var(--sl-text-secondary);
 }
 
+.sl-agent-scroll-hint {
+  margin-top: var(--sl-space-2);
+}
+
 .sl-agent-sandbox-result {
   margin-top: var(--sl-space-3);
   padding: var(--sl-space-3);
@@ -204,8 +309,17 @@
   color: var(--sl-text);
 }
 
+/* Идёт запрос: во время прогона видно текст ожидания, а не только
+   заблокированную кнопку. */
+.sl-agent-running {
+  margin: var(--sl-space-2) 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
 .sl-agent-message {
-  margin: 0;
+  margin: var(--sl-space-2) 0 0;
   padding: var(--sl-space-2) var(--sl-space-3);
   border: 1px solid var(--sl-divider);
   border-radius: var(--sl-radius);
@@ -221,4 +335,21 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--sl-accent);
+}
+
+@media (max-width: 640px) {
+  .sl-agent-page {
+    padding: var(--sl-space-3);
+  }
+
+  .sl-agent-title {
+    font-size: 22px;
+  }
+
+  /* Кнопка сохранения на всю ширину: на узком экране она должна быть
+     достижима большим пальцем. */
+  .sl-agent-savebar .sl-agent-button {
+    width: 100%;
+    align-self: stretch;
+  }
 }

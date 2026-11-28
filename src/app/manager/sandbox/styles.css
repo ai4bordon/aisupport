@@ -10,6 +10,13 @@
   font-family: var(--sl-font-sans);
 }
 
+/* Ширина 390px: раздел не выходит за экран, горизонтального скролла нет. */
+.sandbox-page *,
+.sandbox-page *::before,
+.sandbox-page *::after {
+  box-sizing: border-box;
+}
+
 .sandbox-header {
   margin-bottom: var(--sl-space-4);
 }
@@ -45,6 +52,9 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sl-space-4);
   align-items: start;
+  /* Ширина колонок не превышает ширину экрана: содержимое не распирает
+     сетку на узком экране. */
+  max-width: 100%;
 }
 
 .sandbox-form {
@@ -63,6 +73,7 @@
 .sandbox-question {
   box-sizing: border-box;
   width: 100%;
+  max-width: 100%;
   resize: vertical;
   padding: var(--sl-space-3);
   border: 1px solid var(--sl-divider);
@@ -152,6 +163,7 @@
   border: 1px solid var(--sl-divider);
   border-radius: var(--sl-radius);
   background: var(--sl-surface);
+  min-width: 0;
 }
 
 .sandbox-history__top {
@@ -161,17 +173,21 @@
   gap: var(--sl-space-2);
   color: var(--sl-text-secondary);
   font-size: 12px;
+  /* Длинный идентификатор сессии не должен распирать карточку. */
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__question {
   margin: var(--sl-space-2) 0 0;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__answer {
   margin: var(--sl-space-1) 0 var(--sl-space-2);
   color: var(--sl-text-secondary);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .sandbox-history__repeat {
@@ -198,8 +214,26 @@
   outline-offset: 2px;
 }
 
+@media (max-width: 640px) {
+  .sandbox-page {
+    padding: var(--sl-space-3);
+  }
+
+  .sandbox-header h1 {
+    font-size: 22px;
+  }
+
+  /* Кнопка проверки на всю ширину: на узком экране она должна быть
+     достижима большим пальцем. */
+  .sandbox-actions .sl-m-button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 960px) {
   .sandbox-layout {
-    grid-template-columns: 1fr;
+    /* `minmax(0, 1fr)`, а не `1fr`: иначе ширина карточки определяется
+       содержимым и раздел уезжает за узкий экран. */
+    grid-template-columns: minmax(0, 1fr);
   }
 }

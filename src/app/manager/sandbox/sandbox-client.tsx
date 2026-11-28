@@ -250,11 +250,12 @@ export function SandboxClient() {
                 onClick={() => void runQuestion()}
                 disabled={running || question.trim().length === 0}
               >
-                Проверить
+                {running ? "Проверяем…" : "Проверить"}
               </button>
               {running ? (
-                <p className="sandbox-running" role="status">
-                  Проверяем вопрос в песочнице…
+                <p className="sandbox-running" role="status" aria-live="polite">
+                  Запрос отправлен в песочницу — ждём ответ агента. Обычно это
+                  занимает несколько секунд.
                 </p>
               ) : null}
             </div>
