@@ -272,7 +272,7 @@ describe("реестр возможностей и кабинет настрое
     expect(
       container.querySelector("[data-status]")?.getAttribute("data-status"),
     ).toBe("401");
-    expect(container.textContent).toContain("код менеджера");
+    expect(container.textContent).toContain("код доступа");
     expect(container.querySelector('[name="model"]')).toBeNull();
   });
 

@@ -33,11 +33,11 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 /**
- * Барьер кабинета менеджера.
+ * Барьер кабинета.
  *
- * Тот же барьер, что у остальных маршрутов менеджера: подписанная cookie
- * `support_manager` (docs/api-contract.md §11.1). Cookie стенда в кабинет
- * не пускает.
+ * Тот же барьер, что у остальных маршрутов кабинета: подписанная cookie
+ * доступа `support_access` (docs/api-contract.md §11.1). Код один на весь
+ * стенд: он открывает и чат, и кабинет.
  */
 function managerAllowed(request: Request): boolean {
   return readAccessSession(request.headers.get("cookie") ?? undefined) !== null;
@@ -46,7 +46,7 @@ function managerAllowed(request: Request): boolean {
 /** Текущая версия конфигурации и реестр возможностей. */
 export async function GET(request: Request): Promise<Response> {
   if (!managerAllowed(request)) {
-    return errorResponse(401, "unauthorized", "Кабинет менеджера закрыт: нужен код менеджера");
+    return errorResponse(401, "unauthorized", "Кабинет закрыт: нужен код доступа");
   }
 
   try {
@@ -81,7 +81,7 @@ export async function GET(request: Request): Promise<Response> {
 /** Изменение поддерживаемой настройки: новая версия и запись аудита. */
 export async function PUT(request: Request): Promise<Response> {
   if (!managerAllowed(request)) {
-    return errorResponse(401, "unauthorized", "Кабинет менеджера закрыт: нужен код менеджера");
+    return errorResponse(401, "unauthorized", "Кабинет закрыт: нужен код доступа");
   }
 
   let payload: unknown;

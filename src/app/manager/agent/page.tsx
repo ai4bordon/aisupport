@@ -14,7 +14,7 @@ export const metadata: Metadata = {
  *
  * Страница переносит готовую страницу настроек среза 08
  * (`src/app/settings/**`) в кабинет менеджера. Барьер кабинера — та же
- * подписанная cookie `support_manager`, что и у остальных маршрутов
+ * подписанная cookie доступа `support_access`, что и у остальных маршрутов
  * менеджера: без действующей cookie содержимое не рендерится
  * (`docs/api-contract.md` §11.1, `src/app/manager/layout.tsx`).
  *

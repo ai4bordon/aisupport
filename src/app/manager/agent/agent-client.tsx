@@ -369,7 +369,7 @@ export function AgentClient({ defaultPrompt }: AgentClientProps) {
       <main className="sl-agent-page" aria-label="Настройки агента">
         <ManagerErrorState
           title="Не удалось загрузить настройки агента"
-          description="Проверьте соединение с сервером и обновите страницу. Кабинет менеджера закрыт отдельным кодом — войдите и попробуйте снова."
+          description="Проверьте соединение с сервером и обновите страницу. Кабинет закрыт до входа по коду доступа — войдите и попробуйте снова."
         />
       </main>
     );

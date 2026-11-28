@@ -34,7 +34,7 @@ export default function ManagerLoginPage() {
 
     const value = code.trim();
     if (value.length === 0) {
-      setError("Введите код менеджера.");
+      setError("Введите код доступа.");
       return;
     }
 
@@ -72,13 +72,14 @@ export default function ManagerLoginPage() {
       <div className="sl-m-login">
         <h1 className="sl-m-page__title">Вход в кабинет менеджера</h1>
         <p className="sl-m-page__lead">
-          Кабинет закрыт отдельным кодом менеджера. Код проверяется на сервере
-          и не сохраняется в браузере: выдаётся подписанная cookie сессии.
+          Код один на весь стенд: он открывает и чат, и кабинет. Код
+          проверяется на сервере и не сохраняется в браузере: выдаётся
+          подписанная cookie сессии.
         </p>
 
         <form className="sl-m-login__form" onSubmit={submit} noValidate>
           <label className="sl-m-login__label" htmlFor="sl-m-manager-code">
-            Код менеджера
+            Код доступа
           </label>
           <input
             className="sl-m-login__input"
@@ -92,7 +93,7 @@ export default function ManagerLoginPage() {
             disabled={pending}
           />
 
-          {pending ? <ManagerLoading label="Проверяем код менеджера" /> : null}
+          {pending ? <ManagerLoading label="Проверяем код доступа" /> : null}
 
           {error ? (
             <p className="sl-m-login__error" role="alert">
@@ -136,5 +137,5 @@ async function readError(response: Response): Promise<string> {
   } catch {
     // Тело ответа не разобралось — сообщаем общий текст.
   }
-  return "Код не принят. Проверьте код менеджера и попробуйте снова.";
+  return "Код не принят. Проверьте код доступа и попробуйте снова.";
 }

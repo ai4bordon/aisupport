@@ -97,7 +97,7 @@ function promiseView(record: PromiseRecord): QueuePromise {
 /**
  * GET /api/manager/queue — данные очереди обращений и журнала обещаний.
  *
- * Кабинет закрыт cookie `support_manager`. Арендатор определяется сервером
+ * Кабинет закрыт cookie доступа `support_access`. Арендатор определяется сервером
  * из окружения и не принимается из тела запроса.
  */
 export async function GET(request: Request): Promise<Response> {

@@ -26,7 +26,7 @@ function errorResponse(status: number, code: string, message: string): Response 
 
 export async function GET(request: Request): Promise<Response> {
   if (readAccessSession(request.headers.get("cookie") ?? undefined) === null) {
-    return errorResponse(401, "unauthorized", "Кабинет менеджера закрыт: нужен код менеджера");
+    return errorResponse(401, "unauthorized", "Кабинет закрыт: нужен код доступа");
   }
 
   const limitParam = new URL(request.url).searchParams.get("limit");

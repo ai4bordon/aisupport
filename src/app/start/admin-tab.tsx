@@ -5,9 +5,9 @@ import { useEffect, useState } from "react";
 /**
  * Вкладка «Админка»: кабинет менеджера.
  *
- * Кабинет живёт по отдельному коду менеджера и по отдельной cookie
- * `support_manager`: клиентский код стенда в кабинет не пускает, а код
- * менеджера в клиентскую cookie не попадает.
+ * Код один на весь стенд: он открывает и чат, и кабинет (решение владельца
+ * от 28.11.2026). Раздельные коды заводим позже, когда стенд возьмёт
+ * заказчик.
  *
  * Если кабинет ещё не готов, показывается честное состояние со ссылкой —
  * без имитации работы.
@@ -119,11 +119,11 @@ export function AdminTab() {
 }
 
 /**
- * Кадр кабинета: запрос кода менеджера и сам кабинет.
+ * Кадр кабинета: запрос кода доступа и сам кабинет.
  *
- * Код проверяется через `/api/access` с флагом `manager` — сервер выдаёт
- * отдельную cookie `support_manager`. Пока кода нет, кабинет не грузится, и
- * вместо него видна форма входа.
+ * Код проверяется через `/api/access` — сервер выдаёт подписанную cookie
+ * доступа `support_access`. Пока кода нет, кабинет не грузится, и вместо
+ * него видна форма входа.
  */
 function ManagerFrame({ state }: { state: ManagerState }) {
   const [code, setCode] = useState("");
@@ -186,7 +186,7 @@ function ManagerFrame({ state }: { state: ManagerState }) {
         <form className="sl-start__form" onSubmit={(event) => void submit(event)}>
           <div className="sl-start__field">
             <label className="sl-start__label" htmlFor="sl-start-manager-code">
-              Код менеджера
+              Код доступа
             </label>
             <input
               className="sl-start__input"

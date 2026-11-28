@@ -223,7 +223,7 @@ describe("доступность оболочки", () => {
   it("у поля кода менеджера есть подпись", () => {
     render(createElement(ManagerLoginPage));
 
-    const input = screen.getByLabelText(/код менеджера/i);
+    const input = screen.getByLabelText(/код доступа/i);
     expect(input).toHaveAttribute("type", "password");
     expect(input).toHaveAttribute("name", "code");
   });
@@ -403,7 +403,7 @@ describe("шлюз доступа к кабинету", () => {
       }),
     );
 
-    expect(screen.getByLabelText(/код менеджера/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/код доступа/i)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /требуется вход менеджера/i })).not.toBeInTheDocument();
   });
 
@@ -440,7 +440,7 @@ describe("страница входа менеджера", () => {
 
     render(createElement(ManagerLoginPage));
 
-    const input = screen.getByLabelText(/код менеджера/i);
+    const input = screen.getByLabelText(/код доступа/i);
     fireEvent.change(input, { target: { value: "manager-secret-code" } });
     fireEvent.click(screen.getByRole("button", { name: /войти в кабинет/i }));
 
@@ -481,7 +481,7 @@ describe("страница входа менеджера", () => {
 
     render(createElement(ManagerLoginPage));
 
-    fireEvent.change(screen.getByLabelText(/код менеджера/i), {
+    fireEvent.change(screen.getByLabelText(/код доступа/i), {
       target: { value: "manager-secret-code" },
     });
     fireEvent.click(screen.getByRole("button", { name: /войти в кабинет/i }));
@@ -510,7 +510,7 @@ describe("страница входа менеджера", () => {
 
     render(createElement(ManagerLoginPage));
 
-    fireEvent.change(screen.getByLabelText(/код менеджера/i), {
+    fireEvent.change(screen.getByLabelText(/код доступа/i), {
       target: { value: "manager-secret-code" },
     });
     fireEvent.click(screen.getByRole("button", { name: /войти в кабинет/i }));

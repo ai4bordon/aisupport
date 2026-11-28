@@ -38,7 +38,7 @@ export const metadata: Metadata = {
 /**
  * Кабинет менеджера: вкладка «Агент» (бриф §8).
  *
- * Барьер кабинера — та же подписанная cookie `support_manager`, что и в
+ * Барьер кабинера — та же подписанная cookie доступа `support_access`, что и в
  * остальных маршрутах менеджера: без действующей cookie страница закрыта
  * (docs/api-contract.md §11.1).
  *
@@ -56,7 +56,7 @@ export default async function SettingsPage() {
         <div className="sl-settings__card">
           <h1 className="sl-settings__title">Кабинет менеджера закрыт</h1>
           <p className="sl-settings__lead">
-            Нужен код менеджера. Без действующей cookie страница настроек
+            Нужен код доступа. Без действующей cookie страница настроек
             недоступна.
           </p>
         </div>
