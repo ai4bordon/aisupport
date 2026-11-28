@@ -148,6 +148,59 @@ describe("валидатор сумм сверяет текст ответа, а
     expect(result.valid).toBe(true);
   });
 
+  it("персональные данные из подтверждённого источника не считаются утечкой", () => {
+    // Регрессия живьёма (UX-аудит 28.11, 28.11 16:45): вопрос «Как
+    // восстановить пароль?» давал 422 approval_required. Ответ цитировал
+    // email из статьи, а validateAnswer сверял персональные данные только с
+    // allowedPersonalValues и НЕ с текстами источников — в отличие от
+    // validateOutgoingText, где источники исключены.
+    const result = validateAnswer(
+      {
+        text: "Восстановите пароль по ссылке, которую мы отправим на support@softline.ru",
+        amounts: [],
+        citations: [],
+      },
+      [
+        {
+          kind: "kb_article",
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "Восстановление пароля",
+          location: null,
+          text: "Для восстановления пароля мы отправим ссылку на support@softline.ru.",
+        },
+      ],
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  it("персональные данные, которых нет в источниках, остаются нарушением", () => {
+    // Проверка не ослабляется: данные, которых нет в подтверждённых
+    // источниках, по-прежнему блокируют ответ.
+    const result = validateAnswer(
+      {
+        text: "Позвоните по номеру +7 999 123 45 67",
+        amounts: [],
+        citations: [],
+      },
+      [
+        {
+          kind: "kb_article",
+          id: "44444444-4444-4444-8444-444444444444",
+          title: "Восстановление пароля",
+          location: null,
+          text: "Для восстановления пароля мы отправим ссылку на support@softline.ru.",
+        },
+      ],
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.violations.map((violation) => violation.code)).toContain(
+      "raw_pii_in_outgoing",
+    );
+  });
+
   it("нарушение по сумме называет саму сумму в detail", () => {
     const result = validateAnswer(
       {

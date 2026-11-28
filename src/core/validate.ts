@@ -338,10 +338,22 @@ export function validateAnswer(
   // Сырые ПД в исходящем тексте блокируют отправку. Значения, которые уже
   // известны серверу (восстановлены по таблице соответствий), утечкой не
   // считаются: клиент законно получает свои же данные обратно.
+  //
+  // Значения из подтверждённых источников тоже не считаются утечкой: если
+  // в статье написан адрес поддержки и модель его процитировала, клиент
+  // получил данные из своего же одобренного материала, а не чужие. Без
+  // этого исключения вопрос «Как восстановить пароль?» уходил в эскалацию:
+  // модель цитировала адрес из статьи, а валидатор его отвергал.
+  //
+  // Правило то же, что в `validateOutgoingText`.
   const knownValues = new Set(allowedPersonalValues.map((value) => value.toLowerCase()));
-  const leaked = findRawPersonalDataValues(answer.text).filter(
-    (value) => !knownValues.has(value.toLowerCase()),
-  );
+  const sourceHaystack = sources.map((source) => source.text.toLowerCase()).join("\n");
+  const leaked = findRawPersonalDataValues(answer.text).filter((value) => {
+    const lower = value.toLowerCase();
+    if (knownValues.has(lower)) return false;
+    if (sourceHaystack.includes(lower)) return false;
+    return true;
+  });
   if (leaked.length > 0) {
     violations.push({
       code: "raw_pii_in_outgoing",
