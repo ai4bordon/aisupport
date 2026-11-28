@@ -308,12 +308,13 @@ describe("состояния раздела очереди", () => {
     expect(await screen.findAllByText(/Просрочено/)).not.toHaveLength(0);
   });
 
-  it("выключает нереализованные действия и подписывает их", async () => {
+  it("не показывает незавершённые действия", async () => {
     mockQueueResponse();
     render(createElement(QueueClient));
     fireEvent.click(await screen.findByRole("button", { name: /Клиент просит подтвердить условия/ }));
-    // «Запомнить ответ» реализован: действие менеджера само является
-    // одобрением, и ответ попадает в базу знаний (R7, ADR-0019).
+
+    // Незавершённых действий на демо нет: пять неактивных кнопок
+    // «в разработке» выглядели бы как недоделка и ничего не делали.
     for (const name of [
       "Сохранить черновик",
       "Отправить клиенту",
@@ -321,11 +322,14 @@ describe("состояния раздела очереди", () => {
       "Отложить",
       "Написать статью",
     ]) {
-      const button = screen.getByRole("button", { name: new RegExp(name) });
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent("в разработке");
+      expect(
+        screen.queryByRole("button", { name: new RegExp(name) }),
+      ).toBeNull();
     }
+    expect(screen.queryByText(/в разработке/)).toBeNull();
 
+    // «Запомнить ответ» реализован: действие менеджера само является
+    // одобрением, и ответ попадает в базу знаний (R7, ADR-0019).
     const remember = screen.getByRole("button", { name: /Запомнить ответ/ });
     expect(remember).not.toBeDisabled();
     expect(remember).toHaveTextContent("Запомнить ответ");

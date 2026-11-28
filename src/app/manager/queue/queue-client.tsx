@@ -383,21 +383,11 @@ function QueueDetail({ item }: { item: QueueItem }) {
           получит его по тому же вопросу. Отдельное одобрение не требуется.
         </p>
         <div className="queue-actions" aria-label="Действия менеджера">
-          <button type="button" disabled title="В разработке">
-            Сохранить черновик <small>в разработке</small>
-          </button>
-          <button type="button" disabled title="В разработке">
-            Отправить клиенту <small>в разработке</small>
-          </button>
-          <button type="button" disabled title="В разработке">
-            Вернуть агенту <small>в разработке</small>
-          </button>
-          <button type="button" disabled title="В разработке">
-            Отложить <small>в разработке</small>
-          </button>
-          <button type="button" disabled title="В разработке">
-            Написать статью <small>в разработке</small>
-          </button>
+          {/*
+            Незавершённые действия не показываются: пять неактивных кнопок
+            «в разработке» на демо выглядят как недоделка и ничего не делают.
+            Рабочее действие — «Запомнить ответ» — остаётся.
+          */}
           <button
             type="button"
             onClick={() => {

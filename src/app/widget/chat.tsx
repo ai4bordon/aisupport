@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { safeSourceHref } from "@/core/safe-link";
 
 /**
  * Минимальный веб-виджет чата для ручной проверки.
@@ -120,6 +121,7 @@ export function Chat() {
         outcome?: "respond" | "escalate";
         answer: { text: string; sources: Source[] } | null;
         escalation: { reason: string; summary: string } | null;
+        error?: { code?: string; message?: string };
       } | null;
 
       // Идентификатор диалога сервера запоминается: следующий ход идёт с
@@ -130,11 +132,24 @@ export function Chat() {
       }
 
       if (!response.ok || !body) {
+        // Ответ не прошёл проверку: обращение уже ушло менеджеру, и клиент
+        // должен видеть человеческую фразу, а не техническую заглушку.
+        // Само тело ошибки клиенту не показывается — оно для журнала.
+        //
+        // Код `approval_required` означает, что ответ не прошёл проверку и
+        // ушёл менеджеру: клиенту об этом и говорим. Любой другой отказ —
+        // тоже эскалация, но с общей фразой.
+        const escalated =
+          body?.escalation?.summary ??
+          (body?.error?.code === "approval_required"
+            ? "Обращение передано менеджеру."
+            : null);
         setMessages((current) => [
           ...current,
           {
             role: "agent",
-            text: "Не удалось обработать запрос. Попробуйте позже.",
+            text: escalated ?? "Обращение передано менеджеру.",
+            escalation: body?.escalation ?? null,
           },
         ]);
         return;
@@ -194,14 +209,31 @@ export function Chat() {
 
               {message.sources && message.sources.length > 0 ? (
                 <ul className="chat__sources">
-                  {message.sources.map((source) => (
-                    <li key={source.id} className="chat__source">
-                      <span className="chat__source-title">{source.title}</span>
-                      {source.location ? (
-                        <span className="chat__source-location">{source.location}</span>
-                      ) : null}
-                    </li>
-                  ))}
+                  {message.sources.map((source) => {
+                    // Ссылкой становится только безопасный адрес: адрес
+                    // источника приходит из данных, и в `href` без проверки
+                    // он мог бы выполнить код в браузере клиента.
+                    const href = safeSourceHref(source.location);
+                    return (
+                      <li key={source.id} className="chat__source">
+                        {href ? (
+                          <a
+                            className="chat__source-title chat__source-title--link"
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {source.title}
+                          </a>
+                        ) : (
+                          <span className="chat__source-title">{source.title}</span>
+                        )}
+                        {source.location ? (
+                          <span className="chat__source-location">{source.location}</span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
 

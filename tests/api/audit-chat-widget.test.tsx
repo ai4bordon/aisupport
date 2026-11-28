@@ -147,4 +147,143 @@ describe("виджет веб-чата", () => {
       window.sessionStorage.getItem("support_conversation_id"),
     ).toBe(server.conversationId);
   });
+
+  it("при 422 показывает человеческую эскалацию, а не техническую заглушку", async () => {
+    // Ответ не прошёл проверку: обращение уже ушло менеджеру, и клиент
+    // должен видеть об этом человеческую фразу.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "approval_required",
+              message: "Ответ не прошёл проверку и не отправлен клиенту",
+              details: {},
+              request_id: "req-1",
+            },
+          }),
+          { status: 422, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Как оплатить подписку?" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Обращение передано менеджеру/)).toBeInTheDocument();
+    });
+    // Технической заглушки на экране нет.
+    expect(screen.queryByText("Не удалось обработать запрос. Попробуйте позже.")).toBeNull();
+  });
+
+  it("при эскалации показывает её текст, а не заглушку", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            conversation_id: "ab2c3d4e-1111-4111-8111-111111111111",
+            outcome: "escalate",
+            answer: null,
+            escalation: {
+              reason: "no_confirmed_source",
+              summary: "Передаю ваш вопрос менеджеру, он ответит в рабочее время.",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Передаю ваш вопрос менеджеру, он ответит в рабочее время."),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("источник с http(s)-адресом — ссылка, безопасная ссылка — текстом", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            conversation_id: "ab2c3d4e-1111-4111-8111-111111111111",
+            outcome: "respond",
+            answer: {
+              text: "Ответ агента",
+              sources: [
+                {
+                  kind: "kb_article",
+                  id: "art-1",
+                  title: "Статья с адресом",
+                  location: "https://store.softline.ru/test/1/",
+                },
+                {
+                  kind: "kb_article",
+                  id: "art-2",
+                  title: "Статья без адреса",
+                  location: null,
+                },
+                {
+                  kind: "kb_article",
+                  id: "art-3",
+                  title: "Статья с опасным адресом",
+                  location: "javascript:alert(1)",
+                },
+              ],
+            },
+            escalation: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Ответ агента")).toBeInTheDocument();
+    });
+
+    const link = screen.getByRole("link", { name: /Статья с адресом/ });
+    expect(link.getAttribute("href")).toBe("https://store.softline.ru/test/1/");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+
+    // Источник без адреса и источник с небезопасным адресом — текстом.
+    expect(screen.queryByRole("link", { name: /Статья без адреса/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /опасным адресом/ })).toBeNull();
+    expect(screen.getByText("Статья с опасным адресом")).toBeInTheDocument();
+  });
 });

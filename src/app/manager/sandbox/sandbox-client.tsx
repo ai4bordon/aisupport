@@ -7,6 +7,7 @@ import {
   ManagerErrorState,
   ManagerLoading,
 } from "@/app/manager/components";
+import { safeSourceHref } from "@/core/safe-link";
 
 /**
  * Клиентская часть раздела кабинета менеджера «Песочница и история».
@@ -282,11 +283,29 @@ export function SandboxClient() {
                 <>
                   <h4 className="sandbox-result__subtitle">Источники</h4>
                   <ul className="sandbox-source-list">
-                    {result.sources.map((source) => (
-                      <li key={`${source.kind}-${source.id}`}>
-                        {source.title ?? source.location ?? source.id}
-                      </li>
-                    ))}
+                    {result.sources.map((source) => {
+                      // Ссылкой становится только безопасный адрес: адрес
+                      // источника приходит из данных, и в `href` без проверки
+                      // он мог бы выполнить код в браузере.
+                      const href = safeSourceHref(source.location);
+                      const label = source.title ?? source.location ?? source.id;
+                      return (
+                        <li key={`${source.kind}-${source.id}`}>
+                          {href ? (
+                            <a
+                              className="sandbox-source-link"
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {label}
+                            </a>
+                          ) : (
+                            label
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </>
               ) : null}

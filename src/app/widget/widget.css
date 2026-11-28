@@ -85,6 +85,17 @@
   font-weight: 600;
 }
 
+/* Источник-ссылка: цвет и подчёркивание указывают, что по нему можно
+   перейти. */
+.chat__source-title--link {
+  color: var(--sl-accent);
+  text-decoration: underline;
+}
+
+.chat__source-title--link:hover {
+  color: var(--sl-accent-hover);
+}
+
 .chat__source-location {
   color: var(--sl-text-muted);
   margin-left: var(--sl-space-1);

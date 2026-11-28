@@ -132,6 +132,16 @@
   font-size: 13px;
 }
 
+/* Источник-ссылка: видно, что по нему можно перейти. */
+.sandbox-source-link {
+  color: var(--sl-accent);
+  text-decoration: underline;
+}
+
+.sandbox-source-link:hover {
+  color: var(--sl-accent-hover);
+}
+
 .sandbox-history {
   display: grid;
   gap: var(--sl-space-3);
