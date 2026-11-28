@@ -126,6 +126,74 @@ describe("виджет веб-чата", () => {
     expect(screen.getAllByText("Ответ агента")).toHaveLength(2);
   });
 
+  it("показывает, что агент печатает, пока ответа нет", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): кнопка «Отправить» гасла, и
+    // две-три секунды тишины читались как зависание.
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response(
+          JSON.stringify({
+            conversation_id: "ab2c3d4e-1111-4111-8111-111111111111",
+            outcome: "respond",
+            answer: { text: "Ответ агента", sources: [] },
+            escalation: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    expect(await screen.findByText("Агент печатает…")).toBeInTheDocument();
+
+    release?.();
+    await waitFor(() => {
+      expect(screen.queryByText("Агент печатает…")).toBeNull();
+    });
+  });
+
+  it("прокручивает ленту к ответу агента", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): ответ приходил ниже видимой
+    // области, экран оставался наверху, и человек видел только свой
+    // вопрос — ответа как будто не было.
+    const server = stubServer();
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Первый вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    await waitFor(() => {
+      expect(server.calls).toHaveLength(1);
+    });
+
+    const log = document.querySelector(".chat__log") as HTMLElement | null;
+    expect(log).not.toBeNull();
+    expect(log?.scrollTop).toBe(log?.scrollHeight);
+  });
+
   it("после первого хода идентификатор диалога запоминается", async () => {
     const server = stubServer();
 

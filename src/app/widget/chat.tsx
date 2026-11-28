@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { safeSourceHref } from "@/core/safe-link";
 
 /**
@@ -68,6 +68,27 @@ export function Chat() {
   const [conversationId, setConversationId] = useState<string | null>(() =>
     readStoredConversationId(),
   );
+  // Лента ответов: автопрокрутка идёт к её нижней границе.
+  const logRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Прокрутка ленты вниз.
+   *
+   * Ответ агента появляется под последним сообщением клиента, и без
+   * прокрутки он остаётся за нижней границей окна: клиент видит только
+   * свой вопрос и думает, что ответа нет.
+   */
+  function scrollLogToBottom(): void {
+    const log = logRef.current;
+    if (!log) return;
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // После каждого сообщения и во время ожидания ответа лента прокручивается
+  // вниз.
+  useEffect(() => {
+    scrollLogToBottom();
+  }, [messages, pending]);
 
   /** Запрос хода с указанным идентификатором диалога. */
   async function postMessage(
@@ -191,7 +212,7 @@ export function Chat() {
         <h1 className="chat__title">Поддержка ПАО «Софтлайн»</h1>
       </header>
 
-      <div className="chat__log" role="log" aria-live="polite">
+      <div className="chat__log" role="log" aria-live="polite" ref={logRef}>
         {messages.length === 0 ? (
           <p className="chat__hint">
             Задайте вопрос — агент ответит по опубликованной базе знаний или
@@ -245,6 +266,12 @@ export function Chat() {
             </article>
           ))
         )}
+
+        {pending ? (
+          <p className="chat__typing" role="status">
+            Агент печатает…
+          </p>
+        ) : null}
       </div>
 
       <form
