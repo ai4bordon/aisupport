@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/manager/queue/route";
 import { QueueClient } from "@/app/manager/queue/queue-client";
@@ -40,6 +40,8 @@ type QueuePayload = {
     conversation_id: string;
     reason: string;
     summary: string;
+    /** Вопрос клиента: тема обращения. */
+    question: string | null;
     draft: string | null;
     sources: unknown[];
     status: string;
@@ -81,10 +83,11 @@ type QueuePayload = {
 const samplePayload: QueuePayload = {
   items: [
     {
-      id: "ticket-1",
+      id: "a1b2c3d4-1111-4111-8111-111111111111",
       conversation_id: "conversation-1",
       reason: "нет подтверждённого источника",
       summary: "Клиент просит подтвердить условия",
+      question: "Как настроить списание лицензий",
       draft: "Черновик ответа",
       sources: [{ kind: "kb_article", id: "article-1", title: "Условия" }],
       status: "open",
@@ -306,6 +309,80 @@ describe("состояния раздела очереди", () => {
     mockQueueResponse(payload);
     render(createElement(QueueClient));
     expect(await screen.findAllByText(/Просрочено/)).not.toHaveLength(0);
+  });
+
+  it("показывает тему обращения, номер и канал", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): карточки очереди были
+    // неразличимы — у всех одна и та же сводка, ни номера, ни вопроса
+    // клиента. Найти нужное обращение было невозможно.
+    mockQueueResponse();
+    render(createElement(QueueClient));
+
+    const item = await screen.findByRole("button", { name: /Открыть обращение/ });
+    // Вопрос клиента — тема обращения.
+    expect(item).toHaveTextContent("Как настроить списание лицензий");
+    // Короткий номер обращения: первые символы идентификатора.
+    expect(item).toHaveTextContent("a1b2c3d4");
+    // Канал.
+    expect(item).toHaveTextContent("Веб");
+  });
+
+  it("ищет обращение по вопросу клиента", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): в очереди 27 обращений с
+    // одинаковой сводкой, и найти нужное без поиска было невозможно.
+    const payload = structuredClone(samplePayload);
+    payload.items.push({
+      ...structuredClone(samplePayload.items[0]!),
+      id: "b2c3d4e5-2222-4222-8222-222222222222",
+      question: "Как подключить лицензирование к порталу",
+      summary: "Клиент просит подтвердить условия",
+      status: "closed",
+      channel: "max",
+    });
+    mockQueueResponse(payload);
+    render(createElement(QueueClient));
+
+    const search = await screen.findByLabelText("Поиск по обращениям");
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "подключить лицензирование" } });
+    });
+
+    await waitFor(() => {
+      const items = screen.getAllByRole("button", { name: /Открыть обращение/ });
+      expect(items).toHaveLength(1);
+    });
+    expect(
+      screen.getByText("Как подключить лицензирование к порталу"),
+    ).toBeInTheDocument();
+  });
+
+  it("фильтрует обращения по статусу и каналу", async () => {
+    const payload = structuredClone(samplePayload);
+    payload.items.push({
+      ...structuredClone(samplePayload.items[0]!),
+      id: "b2c3d4e5-2222-4222-8222-222222222222",
+      question: "Другое обращение",
+      status: "closed",
+      channel: "max",
+    });
+    mockQueueResponse(payload);
+    render(createElement(QueueClient));
+
+    const status = await screen.findByLabelText("Фильтр по статусу");
+    await act(async () => {
+      fireEvent.change(status, { target: { value: "closed" } });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: /Открыть обращение/ })).toHaveLength(1);
+    });
+
+    const channel = screen.getByLabelText("Фильтр по каналу");
+    await act(async () => {
+      fireEvent.change(channel, { target: { value: "web" } });
+    });
+    await waitFor(() => {
+      expect(screen.queryAllByRole("button", { name: /Открыть обращение/ })).toHaveLength(0);
+    });
   });
 
   it("не показывает незавершённые действия", async () => {

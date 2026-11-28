@@ -18,6 +18,8 @@ type QueueItem = {
   conversation_id: string;
   reason: string;
   summary: string;
+  /** Вопрос клиента: тема обращения. */
+  question: string | null;
   draft: string | null;
   sources: Array<{ kind?: string; id?: string; title?: string; location?: string }>;
   status: string;
@@ -56,6 +58,61 @@ function statusLabel(status: string, overdue: boolean): string {
   return STATUS_LABELS[status] ?? status;
 }
 
+/** Фильтр по статусу обращения. */
+type QueueStatusFilter = "all" | "open" | "closed" | "overdue";
+
+/** Фильтр по каналу обращения. */
+type QueueChannelFilter = "all" | "web" | "max";
+
+/** Порядок сортировки обращений. */
+type QueueSortOrder = "newest" | "oldest";
+
+/**
+ * Отбор обращений: поиск, фильтры и сортировка.
+ *
+ * Поиск идёт по вопросу клиента, сводке и короткому номеру — по тому, чем
+ * обращение узнают. Фильтры по статусу и каналу сужают список, сортировка
+ * задаёт порядок.
+ */
+function visibleItems(
+  items: QueueItem[],
+  query: string,
+  status: QueueStatusFilter,
+  channel: QueueChannelFilter,
+  sort: QueueSortOrder,
+): QueueItem[] {
+  const needle = query.trim().toLowerCase();
+  const filtered = items.filter((item) => {
+    if (status === "overdue") {
+      if (!item.overdue) return false;
+    } else if (status !== "all" && item.status !== status) {
+      return false;
+    }
+    if (channel !== "all" && item.channel !== channel) return false;
+    if (needle.length === 0) return true;
+    return (
+      (item.question ?? "").toLowerCase().includes(needle) ||
+      item.summary.toLowerCase().includes(needle) ||
+      shortRef(item.id).toLowerCase().includes(needle)
+    );
+  });
+  return [...filtered].sort((left, right) => {
+    const difference =
+      new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+    return sort === "newest" ? difference : -difference;
+  });
+}
+
+/**
+ * Короткий номер обращения.
+ *
+ * Полный идентификатор нечитаем, а карточек много: короткий номер
+ * позволяет сослаться на обращение голосом и отличить одно от другого.
+ */
+function shortRef(id: string): string {
+  return id.slice(0, 8);
+}
+
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
@@ -78,6 +135,12 @@ export function QueueClient() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"queue" | "promises">("queue");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Поиск и фильтры раздела: без них нужное обращение среди сотни
+  // одинаковых карточек не найти.
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<QueueStatusFilter>("all");
+  const [channelFilter, setChannelFilter] = useState<QueueChannelFilter>("all");
+  const [sortOrder, setSortOrder] = useState<QueueSortOrder>("newest");
   const queueTabRef = useRef<HTMLButtonElement>(null);
   const promisesTabRef = useRef<HTMLButtonElement>(null);
 
@@ -147,7 +210,9 @@ export function QueueClient() {
       <header className="queue-header">
         <div>
           <p className="queue-eyebrow">Кабинет менеджера</p>
-          <h1>Очередь</h1>
+          {/* Заголовок раздела не повторяет название вкладки: «Очередь» и
+              вкладка «Очередь» читались как дубль. */}
+          <h1>Обращения и обещания</h1>
         </div>
         <div className="queue-tabs" role="tablist" aria-label="Разделы очереди">
           <button
@@ -196,8 +261,66 @@ export function QueueClient() {
             <div className="queue-layout">
               <section className="queue-list-panel" aria-label="Список обращений">
                 <h2 className="queue-section-title">Обращения в очереди</h2>
+                <div className="queue-controls">
+                  <label className="queue-control">
+                    <span className="queue-control-label">Поиск</span>
+                    <input
+                      className="queue-search"
+                      type="search"
+                      value={query}
+                      placeholder="Вопрос клиента или номер"
+                      aria-label="Поиск по обращениям"
+                      onChange={(event) => setQuery(event.target.value)}
+                    />
+                  </label>
+                  <label className="queue-control">
+                    <span className="queue-control-label">Статус</span>
+                    <select
+                      className="queue-select"
+                      value={statusFilter}
+                      aria-label="Фильтр по статусу"
+                      onChange={(event) =>
+                        setStatusFilter(event.target.value as QueueStatusFilter)
+                      }
+                    >
+                      <option value="all">Все</option>
+                      <option value="open">В работе</option>
+                      <option value="closed">Закрыто</option>
+                      <option value="overdue">Просрочено</option>
+                    </select>
+                  </label>
+                  <label className="queue-control">
+                    <span className="queue-control-label">Канал</span>
+                    <select
+                      className="queue-select"
+                      value={channelFilter}
+                      aria-label="Фильтр по каналу"
+                      onChange={(event) =>
+                        setChannelFilter(event.target.value as QueueChannelFilter)
+                      }
+                    >
+                      <option value="all">Все</option>
+                      <option value="web">Веб</option>
+                      <option value="max">MAX</option>
+                    </select>
+                  </label>
+                  <label className="queue-control">
+                    <span className="queue-control-label">Сортировка</span>
+                    <select
+                      className="queue-select"
+                      value={sortOrder}
+                      aria-label="Сортировка обращений"
+                      onChange={(event) =>
+                        setSortOrder(event.target.value as QueueSortOrder)
+                      }
+                    >
+                      <option value="newest">Сначала новые</option>
+                      <option value="oldest">Сначала старые</option>
+                    </select>
+                  </label>
+                </div>
                 <ul className="queue-list" aria-label="Обращения в очереди">
-                  {payload.items.map((item) => (
+                  {visibleItems(payload.items, query, statusFilter, channelFilter, sortOrder).map((item) => (
                     <li key={item.id}>
                       <button
                         type="button"
@@ -208,7 +331,13 @@ export function QueueClient() {
                       >
                         <span className="queue-item-top">
                           <span>{item.channel === "max" ? "MAX" : "Веб"}</span>
+                          <span className="queue-item-ref">{shortRef(item.id)}</span>
                           <time dateTime={item.created_at}>{formatDate(item.created_at)}</time>
+                        </span>
+                        {/* Тема обращения — вопрос клиента: сводки у эскалаций
+                            одинаковые, и без вопроса карточки неразличимы. */}
+                        <span className="queue-item-question">
+                          {item.question ?? item.summary}
                         </span>
                         <span className="queue-item-summary">{item.summary}</span>
                         <span className="queue-item-meta">
@@ -296,11 +425,17 @@ function QueueDetail({ item }: { item: QueueItem }) {
     <article className="queue-detail-card">
       <header className="queue-detail-header">
         <div>
-          <p className="queue-eyebrow">Обращение</p>
-          <h2>{item.summary}</h2>
+          <p className="queue-eyebrow">Обращение {shortRef(item.id)}</p>
+          <h2>{item.question ?? item.summary}</h2>
           <p className="queue-detail-meta">
             {item.reason} · {item.channel === "max" ? "MAX" : "Веб"} · {formatDate(item.created_at)}
           </p>
+          {item.question !== null ? (
+            <p className="queue-detail-question">
+              <span className="queue-detail-question-label">Вопрос клиента</span>
+              {item.question}
+            </p>
+          ) : null}
         </div>
         <span
           className={item.overdue ? "queue-status queue-status--overdue" : "queue-status"}

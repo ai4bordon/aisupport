@@ -28,6 +28,14 @@ type QueueItem = {
   conversation_id: string;
   reason: string;
   summary: string;
+  /**
+   * Вопрос клиента: тема обращения.
+   *
+   * Без него карточки очереди неразличимы: у эскалаций сводка одна и та же
+   * («Ответ не прошёл проверку…»), и понять, какое обращение брать в работу,
+   * невозможно. Берётся первое сообщение клиента в диалоге.
+   */
+  question: string | null;
   draft: string | null;
   sources: unknown[];
   status: string;
@@ -56,6 +64,11 @@ type EscalationRow = {
   result: string;
   trace_ref: string;
   is_shadow: boolean;
+};
+
+type ClientQuestionRow = {
+  conversation_id: string;
+  text_masked: string;
 };
 
 type AgentStepRow = {
@@ -148,6 +161,25 @@ export async function GET(request: Request): Promise<Response> {
             [tenantId, conversationIds],
           );
 
+    // Вопрос клиента по каждому обращению: тема, по которой менеджер ищет
+    // нужное обращение среди одинаковых сводок.
+    const questions =
+      conversationIds.length === 0
+        ? { rows: [] as ClientQuestionRow[] }
+        : await getPool().query<ClientQuestionRow>(
+            `SELECT DISTINCT ON (conversation_id) conversation_id, text_masked
+               FROM messages
+              WHERE tenant_id = $1
+                AND conversation_id = ANY($2::uuid[])
+                AND role = 'client'
+              ORDER BY conversation_id, created_at ASC, id ASC`,
+            [tenantId, conversationIds],
+          );
+    const questionByConversation = new Map<string, string>();
+    for (const row of questions.rows) {
+      questionByConversation.set(row.conversation_id, row.text_masked);
+    }
+
     const records = await listPromises({ tenantId });
     const promiseItems = records.map(promiseView);
     const stepsByConversation = new Map<string, QueueStep[]>();
@@ -177,6 +209,7 @@ export async function GET(request: Request): Promise<Response> {
       conversation_id: row.conversation_id,
       reason: row.reason,
       summary: row.summary,
+      question: questionByConversation.get(row.conversation_id) ?? null,
       draft: row.draft,
       sources: row.sources,
       status: row.status,

@@ -104,6 +104,39 @@
   list-style: none;
 }
 
+/* Панель управления списком: поиск, фильтры и сортировка. */
+.queue-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin-bottom: var(--sl-space-2);
+}
+
+.queue-control {
+  display: grid;
+  gap: var(--sl-space-1);
+  min-width: 140px;
+}
+
+.queue-control-label {
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.queue-search,
+.queue-select {
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+}
+
 .queue-list {
   display: grid;
   gap: var(--sl-space-2);
@@ -132,6 +165,26 @@
   box-shadow: 0 0 0 2px var(--sl-bg);
 }
 
+/* Вопрос клиента в раскрытом обращении. */
+.queue-detail-question {
+  margin: var(--sl-space-2) 0 0;
+  padding: var(--sl-space-2) var(--sl-space-3);
+  border-left: 3px solid var(--sl-accent);
+  background: var(--sl-bg);
+  color: var(--sl-text);
+  line-height: 1.5;
+}
+
+.queue-detail-question-label {
+  display: block;
+  margin-bottom: var(--sl-space-1);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .queue-item-top,
 .queue-item-meta,
 .queue-detail-meta {
@@ -140,6 +193,19 @@
   gap: var(--sl-space-2);
   color: var(--sl-text-secondary);
   font-size: 12px;
+}
+
+/* Тема обращения: вопрос клиента. Сводки у эскалаций одинаковые, и без
+   темы карточки неразличимы между собой. */
+.queue-item-question {
+  font-weight: 600;
+  color: var(--sl-text);
+}
+
+/* Короткий номер обращения: полный идентификатор нечитаем. */
+.queue-item-ref {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--sl-text-secondary);
 }
 
 .queue-item-summary {
