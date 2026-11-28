@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ManagerCard,
   ManagerEmptyState,
@@ -47,6 +47,13 @@ type KnowledgeDocument = {
 type KnowledgeDraft = {
   id: string;
   title: string;
+  /**
+   * Полный текст материала.
+   *
+   * Нужен для поиска по тексту статьи: по заголовку материал находится
+   * не всегда.
+   */
+  body_md: string;
   status: string;
   conversation_id: string | null;
   source_message_ids: string[];
@@ -119,6 +126,42 @@ const DRAFT_STATUS_LABELS: Record<string, string> = {
   rejected: "Отклонён",
   draft: "Черновик",
 };
+
+/** Фильтр по состоянию черновика. */
+type DraftStatusFilter =
+  | "all"
+  | "pending_review"
+  | "approved"
+  | "published"
+  | "rejected";
+
+/** Сколько черновиков показывается на одной странице. */
+const DRAFTS_PAGE_SIZE = 10;
+
+/**
+ * Отбор черновиков: поиск по названию и тексту, фильтр по состоянию.
+ *
+ * Поиск идёт по заголовку и по тексту материала: менеджер ищет и по
+ * названию статьи, и по фразе из неё. Фильтр по состоянию оставляет только
+ * те материалы, которые ждут решения (или уже опубликованы, отклонены).
+ */
+function visibleDrafts(
+  drafts: KnowledgeDraft[],
+  query: string,
+  status: DraftStatusFilter,
+): KnowledgeDraft[] {
+  const needle = query.trim().toLowerCase();
+  return drafts.filter((draft) => {
+    if (status !== "all" && draft.status !== status) {
+      return false;
+    }
+    if (needle.length === 0) return true;
+    return (
+      draft.title.toLowerCase().includes(needle) ||
+      (draft.body_md ?? "").toLowerCase().includes(needle)
+    );
+  });
+}
 
 /** Даты раздела показываются в одном формате. */
 const DATE_FORMATTER = new Intl.DateTimeFormat("ru-RU", {
@@ -198,7 +241,18 @@ function DraftModal({
   // Материал изменился (правка сохранена или обновлён другим менеджером):
   // окно возвращается к просмотру и показывает новый текст. Иначе после
   // сохранения менеджер остался бы в редакторе со старым текстом в поле.
+  //
+  // Первая отрисовка пропускается: сброс режима правки на пустом месте
+  // гасил бы клик по «Изменить», если он случился до эффекта.
+  const syncedRef = useRef({ bodyMd: draft.body_md, version: draft.version });
   useEffect(() => {
+    if (
+      syncedRef.current.bodyMd === draft.body_md &&
+      syncedRef.current.version === draft.version
+    ) {
+      return;
+    }
+    syncedRef.current = { bodyMd: draft.body_md, version: draft.version };
     setText(draft.body_md);
     setEditing(false);
   }, [draft.body_md, draft.version]);
@@ -363,10 +417,18 @@ export function KnowledgeClient() {
   const [operations, setOperations] = useState<Record<string, OperationState>>({});
   const [upload, setUpload] = useState<OperationState>({ kind: "idle" });
   const [file, setFile] = useState<File | null>(null);
+  // Скрытое поле выбора файла: браузер подписывает его по-английски, а
+  // кабинет — русскоязычный, поэтому поле вызывается своей кнопкой.
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Открытый черновик: его полный текст приходит с маршрута черновика.
   const [openDraft, setOpenDraft] = useState<DraftDetail | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  // Поиск, фильтр и страница списка черновиков: материалов может быть
+  // много, а нужный иначе не найти.
+  const [draftQuery, setDraftQuery] = useState("");
+  const [draftStatus, setDraftStatus] = useState<DraftStatusFilter>("all");
+  const [draftPage, setDraftPage] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -726,6 +788,19 @@ export function KnowledgeClient() {
     );
   }
 
+  // Отбор и постраничный показ черновиков. Страница считается по отфильтрованному
+  // списку: после смены запроса или фильтра список начинается сначала.
+  const filteredDrafts = visibleDrafts(payload.drafts, draftQuery, draftStatus);
+  const draftPages = Math.max(
+    1,
+    Math.ceil(filteredDrafts.length / DRAFTS_PAGE_SIZE),
+  );
+  const currentPage = Math.min(draftPage, draftPages - 1);
+  const pageDrafts = filteredDrafts.slice(
+    currentPage * DRAFTS_PAGE_SIZE,
+    currentPage * DRAFTS_PAGE_SIZE + DRAFTS_PAGE_SIZE,
+  );
+
   const tabs: ManagerTab[] = [
     {
       id: "documents",
@@ -773,9 +848,13 @@ export function KnowledgeClient() {
                 <label className="kn-label" htmlFor="kn-file">
                   Файл документа
                 </label>
+                {/* Поле выбора файла скрыто от глаз: браузер подписывает его
+                    по-английски («No file chosen»), а кабинет русскоязычный.
+                    Кнопка и подпись под полем говорят по-русски. */}
                 <input
                   id="kn-file"
-                  className="kn-file"
+                  ref={fileInputRef}
+                  className="kn-file kn-file--hidden"
                   type="file"
                   name="file"
                   accept=".pdf,.docx,.md,.txt,application/pdf,text/markdown,text/plain"
@@ -785,6 +864,20 @@ export function KnowledgeClient() {
                     setUpload({ kind: "idle" });
                   }}
                 />
+                <button
+                  type="button"
+                  className="sl-m-button"
+                  onClick={() => {
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  Выбрать файл
+                </button>
+                <p className="kn-file-state" aria-live="polite">
+                  {file
+                    ? `Выбран файл «${file.name}»`
+                    : "Файл не выбран"}
+                </p>
                 <button
                   type="button"
                   className="sl-m-button sl-m-button--primary"
@@ -885,12 +978,54 @@ export function KnowledgeClient() {
                 description="Агент собирает материал из диалога — он появится здесь и будет ждать решения менеджера."
               />
             ) : (
-              <ul className="kn-list" aria-label="Черновики статей">
-                {payload.drafts.map((draft) => {
-                  const key = `draft:${draft.id}`;
-                  const operation = operations[key] ?? { kind: "idle" as const };
-                  return (
-                      <li key={draft.id} className="kn-item">
+              <>
+                <div className="kn-controls">
+                  <label className="kn-control">
+                    <span className="kn-control-label">Поиск</span>
+                    <input
+                      className="kn-search"
+                      type="search"
+                      value={draftQuery}
+                      placeholder="Название или текст статьи"
+                      aria-label="Поиск по черновикам"
+                      onChange={(event) => {
+                        setDraftQuery(event.target.value);
+                        setDraftPage(0);
+                      }}
+                    />
+                  </label>
+                  <label className="kn-control">
+                    <span className="kn-control-label">Статус</span>
+                    <select
+                      className="kn-select"
+                      value={draftStatus}
+                      aria-label="Фильтр по статусу черновика"
+                      onChange={(event) => {
+                        setDraftStatus(event.target.value as DraftStatusFilter);
+                        setDraftPage(0);
+                      }}
+                    >
+                      <option value="all">Все</option>
+                      <option value="pending_review">Ждёт решения</option>
+                      <option value="approved">Одобрен</option>
+                      <option value="published">Опубликован</option>
+                      <option value="rejected">Отклонён</option>
+                    </select>
+                  </label>
+                </div>
+                {filteredDrafts.length === 0 ? (
+                  <ManagerEmptyState
+                    title="Ничего не найдено"
+                    description="Поисковый запрос или фильтр статуса не оставили ни одного материала. Измените условия отбора."
+                  />
+                ) : (
+                  <>
+                    <ul className="kn-list" aria-label="Черновики статей">
+                      {pageDrafts.map((draft) => {
+                        const key = `draft:${draft.id}`;
+                        const operation = operations[key] ?? { kind: "idle" as const };
+                        return (
+                            <li key={draft.id} className="kn-item">
                       <div className="kn-item-main">
                         <button
                           type="button"
@@ -951,9 +1086,41 @@ export function KnowledgeClient() {
                         </div>
                       ) : null}
                     </li>
-                  );
-                })}
-              </ul>
+                        );
+                      })}
+                    </ul>
+                    {draftPages > 1 ? (
+                      <nav className="kn-pagination" aria-label="Страницы списка черновиков">
+                        <button
+                          type="button"
+                          className="sl-m-button"
+                          aria-label="Предыдущая страница"
+                          disabled={currentPage === 0}
+                          onClick={() => {
+                            setDraftPage(Math.max(0, currentPage - 1));
+                          }}
+                        >
+                          Назад
+                        </button>
+                        <span className="kn-pagination-state">
+                          Страница {currentPage + 1} из {draftPages}
+                        </span>
+                        <button
+                          type="button"
+                          className="sl-m-button"
+                          aria-label="Следующая страница"
+                          disabled={currentPage + 1 >= draftPages}
+                          onClick={() => {
+                            setDraftPage(currentPage + 1);
+                          }}
+                        >
+                          Вперёд
+                        </button>
+                      </nav>
+                    ) : null}
+                  </>
+                )}
+              </>
             )}
           </ManagerCard>
         )}
