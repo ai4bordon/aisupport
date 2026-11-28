@@ -194,4 +194,67 @@ describe("поиск по базе знаний", () => {
 
     expect(results).toEqual([]);
   });
+
+  it("материал с точным совпадением попадает в выдачу, даже если вектор заполнил лимит", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): вопрос «Как оплатить подписку?».
+    // Векторный поиск давал пять сходных материалов и занимал лимит, а
+    // текстовая ветка выполнялась только как запасная — при полном лимите
+    // она не выполнялась вовсе. Инструкция «Способы оплаты заказа» не
+    // попадала в выдачу, и агент отвечал по другим статьям или уходил в
+    // эскалацию.
+    const tenant = await resetTenant(TENANT_SLUG);
+
+    // Пять «шумных» материалов: вектор с ними схож, текстового совпадения
+    // с вопросом нет.
+    for (let index = 0; index < 5; index += 1) {
+      const article = await testPool().query<{ id: string }>(
+        `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
+         VALUES ($1, $2, $3, 'published', now(), now()) RETURNING id`,
+        [tenant, `Справочник ${index}`, `Справочник API номер ${index} для разработчиков.`],
+      );
+      await testPool().query(
+        `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+         VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
+        [
+          tenant,
+          article.rows[0]?.id ?? "",
+          `Справочник API номер ${index} для разработчиков.`,
+          `[${embeddingFor(["справочник", "разработчиков", "номер"]).join(",")}]`,
+        ],
+      );
+    }
+
+    // Инструкция: текстовое совпадение с вопросом, вектор с ней не схож.
+    const payment = await testPool().query<{ id: string }>(
+      `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
+       VALUES ($1, 'Способы оплаты заказа', 'В панели управления клиента доступны способы оплаты счетов.', 'published', now(), now())
+       RETURNING id`,
+      [tenant],
+    );
+    await testPool().query(
+      `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+       VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
+      [
+        tenant,
+        payment.rows[0]?.id ?? "",
+        "В панели управления клиента доступны способы оплаты счетов.",
+        `[${embeddingFor(["панели", "управления", "клиента"]).join(",")}]`,
+      ],
+    );
+
+    // Вектор запроса совпадает со «шумными» материалами и не совпадает с
+    // инструкцией: так выглядит случай на стенде, где векторная выдача
+    // занимала лимит целиком.
+    setEmbeddingProvider({
+      model: "deterministic-hash-v1",
+      embed: async () => embeddingFor(["справочник", "разработчиков", "номер"]),
+    });
+
+    const results = await search("Как оплатить счета?", tenant);
+
+    // Вектор заполнил лимит — пять шумных материалов.
+    expect(results.length).toBe(5);
+    // Инструкция с точным совпадением по словам в выдаче осталась.
+    expect(results.some((result) => result.title === "Способы оплаты заказа")).toBe(true);
+  });
 });

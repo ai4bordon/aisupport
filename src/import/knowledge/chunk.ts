@@ -67,11 +67,27 @@ export function selectIndexableChunks(chunks: Chunk[]): Chunk[] {
   const longEnough = chunks.filter((chunk) => chunk.text.length >= MIN_CHUNK_LENGTH);
   if (longEnough.length > 0) return longEnough;
   // Короткий материал: берём те чанки, где под шапкой есть текст.
-  const withBody = chunks.filter((chunk) => {
-    const body = chunk.text.split("\n").slice(1).join("\n").trim();
-    return body.length >= MIN_INDEXABLE_BODY_LENGTH;
-  });
+  //
+  // Тело извлекается по границе шапки, а не разбором строк: шапка состоит
+  // из двух строк — «Источник: <url> | <путь>» и заголовка, — и при
+  // разборе первой строки заголовок попадал в тело. Тогда материал без
+  // текста проходил проверку длины за счёт своего заголовка.
+  const withBody = chunks.filter((chunk) => bodyOf(chunk).length >= MIN_INDEXABLE_BODY_LENGTH);
   return withBody.length > 0 ? withBody : [];
+}
+
+/**
+ * Содержательная часть чанка без шапки.
+ *
+ * Шапка чанка — две строки: адрес источника с путём раздела и заголовок.
+ * Тело начинается после них.
+ */
+function bodyOf(chunk: Chunk): string {
+  const lines = chunk.text.split("\n");
+  // Первая строка — «Источник: …», вторая — заголовок (если он есть).
+  // Заголовок может отсутствовать: тогда тело начинается со второй строки.
+  const headerLines = chunk.title.trim().length > 0 ? 2 : 1;
+  return lines.slice(headerLines).join("\n").trim();
 }
 
 /**

@@ -271,7 +271,39 @@ type ChunkRow = {
   text: string;
   page_no: number | null;
   score: number;
+  /**
+   * Число терминов вопроса, совпавших с заголовком материала.
+   *
+   * Заголовок — то, что клиент назвал своими словами: вопрос «Как оплатить
+   * подписку?» и заголовок «Способы оплаты заказа» говорят об одном и том
+   * же. Считается по `tsvector` заголовка, поэтому словоформы учитываются:
+   * «оплатить» и «оплаты» — одно слово.
+   */
+  title_hits: number;
 };
+
+/**
+ * Бонус за совпадение с вопросом в заголовке материала.
+ *
+ * Заголовок отвечает на вопрос прямо, и такой материал должен быть выше
+ * сходных по смыслу, но не совпавших по словам. Бонус умножается на
+ * слияние по обратному рангу: он перевешивает разницу в пару мест
+ * рейтинга, но не выводит материал из выдачи.
+ */
+const TITLE_MATCH_BONUS = 0.15;
+
+/**
+ * Термины вопроса для полнотекстового поиска и подсчёта совпадений.
+ *
+ * Слова короче трёх знаков и служебные отбрасываются: они не различают
+ * материалы и только размывают совпадение.
+ */
+function queryTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length >= 3 && !STOPWORDS.has(term));
+}
 
 /**
  * Ссылка на источник.
@@ -300,6 +332,42 @@ function locationFromText(
  * `tsvector`: если векторное сходство ничего не дало, полнотекстовое
  * совпадение всё ещё может найти подтверждённый источник.
  */
+/**
+ * Слияние веток выдачи.
+ *
+ * Векторный и текстовый поиск дают несравнимые оценки: смысловая близость
+ * и ранг полнотекстовой выдачи измеряют разное, поэтому в одну шкалу их
+ * смешивать нельзя. Слияние идёт по обратному рангу (reciprocal rank
+ * fusion): вклад ветки тем больше, чем выше её материал в своей выдаче.
+ *
+ * Так материал, который точно совпал с вопросом по словам, не теряется
+ * за сходными по смыслу, но не совпавшими по словам: на живом стенде
+ * вопрос «Как оплатить подписку?» давал пять API-справочников в
+ * векторной выдаче, а инструкция «Способы оплаты заказа» была девятой в
+ * текстовой и до объединения не доходила вовсе.
+ */
+const RRF_K = 60;
+
+/**
+ * Слияние двух выдач по обратному рангу.
+ *
+ * `vectorRanks` и `textRanks` — номера материалов в своей выдаче, начиная
+ * с единицы. Материал, найденный обеими ветвями, получает вклад обеих.
+ */
+function fuseRanks(
+  vectorRanks: Map<string, number>,
+  textRanks: Map<string, number>,
+): Map<string, number> {
+  const fused = new Map<string, number>();
+  for (const [chunkId, rank] of vectorRanks) {
+    fused.set(chunkId, (fused.get(chunkId) ?? 0) + 1 / (RRF_K + rank));
+  }
+  for (const [chunkId, rank] of textRanks) {
+    fused.set(chunkId, (fused.get(chunkId) ?? 0) + 1 / (RRF_K + rank));
+  }
+  return fused;
+}
+
 export async function search(
   query: string,
   tenantId: string,
@@ -320,7 +388,13 @@ export async function search(
       COALESCE(a.title, d.filename) AS title,
       c.text,
       c.page_no,
-      1 - (c.embedding <=> $2::vector) AS score
+      1 - (c.embedding <=> $2::vector) AS score,
+      -- Совпадения терминов вопроса с заголовком: считается по tsvector
+      -- заголовка, поэтому словоформы учитываются.
+      (SELECT count(*)::int
+         FROM unnest($6::text[]) AS term
+        WHERE to_tsvector('russian', COALESCE(a.title, d.filename)) @@ plainto_tsquery('russian', term)
+      ) AS title_hits
     FROM kb_chunks c
     LEFT JOIN kb_articles a ON a.id = c.article_id
     LEFT JOIN kb_documents d ON d.id = c.document_id
@@ -331,28 +405,38 @@ export async function search(
     ORDER BY c.embedding <=> $2::vector
     LIMIT $3
     `,
-    [tenantId, toVectorLiteral(embedding), boundedLimit, MIN_VECTOR_SIMILARITY, model],
+    [
+      tenantId,
+      toVectorLiteral(embedding),
+      boundedLimit,
+      MIN_VECTOR_SIMILARITY,
+      model,
+      queryTerms(query),
+    ],
   );
 
   const seen = new Set<string>();
   const results: SearchResult[] = [];
 
+  // Векторная выдача: смысловая близость.
+  const vectorRows: ChunkRow[] = [];
+  const vectorRanks = new Map<string, number>();
   for (const row of vectorResult.rows) {
     if (row.score <= 0) continue;
-    seen.add(row.chunk_id);
-    results.push({
-      articleId: row.article_id ?? row.document_id ?? "",
-      kind: row.article_id ? "kb_article" : "kb_document",
-      chunkId: row.chunk_id,
-      title: row.title,
-      text: bodyFromText(row.text),
-      location: locationFromText(row.text, row.page_no, row.article_id ? row.title : null),
-      score: Number(row.score),
-    });
+    vectorRows.push(row);
+    vectorRanks.set(row.chunk_id, vectorRanks.size + 1);
   }
 
+  // Текстовая выдача: совпадение по словам вопроса.
+  //
+  // Ветка выполняется всегда, а не только как запасная. Раньше она
+  // срабатывала лишь тогда, когда вектор не заполнил лимит: на живом
+  // стенде вектор давал пять сходных материалов и занимал лимит целиком,
+  // поэтому текстовая ветка не выполнялась вовсе.
   const textQuery = buildTextQuery(query);
-  if (textQuery !== null && results.length < boundedLimit) {
+  const textRows: ChunkRow[] = [];
+  const textRanks = new Map<string, number>();
+  if (textQuery !== null) {
     const textResult = await pool.query<ChunkRow>(
       `
       SELECT
@@ -362,7 +446,11 @@ export async function search(
         COALESCE(a.title, d.filename) AS title,
         c.text,
         c.page_no,
-        ts_rank(c.search_vector, to_tsquery('russian', $2)) AS score
+        ts_rank(c.search_vector, to_tsquery('russian', $2)) AS score,
+        (SELECT count(*)::int
+           FROM unnest($4::text[]) AS term
+          WHERE to_tsvector('russian', COALESCE(a.title, d.filename)) @@ plainto_tsquery('russian', term)
+        ) AS title_hits
       FROM kb_chunks c
       LEFT JOIN kb_articles a ON a.id = c.article_id
       LEFT JOIN kb_documents d ON d.id = c.document_id
@@ -372,23 +460,55 @@ export async function search(
       ORDER BY score DESC
       LIMIT $3
       `,
-      [tenantId, textQuery, boundedLimit],
+      [tenantId, textQuery, boundedLimit, queryTerms(query)],
     );
 
     for (const row of textResult.rows) {
-      if (seen.has(row.chunk_id)) continue;
-      seen.add(row.chunk_id);
-      results.push({
-        articleId: row.article_id ?? row.document_id ?? "",
-        kind: row.article_id ? "kb_article" : "kb_document",
-        chunkId: row.chunk_id,
-        title: row.title,
-        text: bodyFromText(row.text),
-        location: locationFromText(row.text, row.page_no, row.article_id ? row.title : null),
-        score: Number(row.score),
-      });
+      textRows.push(row);
+      textRanks.set(row.chunk_id, textRanks.size + 1);
     }
   }
 
-  return results.slice(0, boundedLimit);
+  // Слияние веток по обратному рангу.
+  const fused = fuseRanks(vectorRanks, textRanks);
+
+  // Бонус за совпадение с вопросом в заголовке материала: заголовок — это
+  // то, что клиент назвал своими словами. На живом стенде вопрос «Как
+  // оплатить подписку?» вёл к пяти API-справочникам, а инструкция
+  // «Способы оплаты заказа» — единственный материал, чей заголовок
+  // отвечает на вопрос, — стоял девятым.
+  const rowsById = new Map<string, ChunkRow>();
+  for (const row of [...vectorRows, ...textRows]) {
+    if (!rowsById.has(row.chunk_id)) rowsById.set(row.chunk_id, row);
+  }
+
+  const ranked = [...fused.entries()]
+    .map(([chunkId, base]) => {
+      const row = rowsById.get(chunkId);
+      const hits = row === undefined ? 0 : row.title_hits;
+      // Бонус за совпадение в заголовке: он перевешивает разницу в один
+      //-два места рейтинга, но не выводит материал из выдачи.
+      const score = base * (1 + TITLE_MATCH_BONUS * hits);
+      return { chunkId, score, row };
+    })
+    .filter((item) => item.row !== undefined)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, boundedLimit);
+
+  for (const item of ranked) {
+    const row = item.row as ChunkRow;
+    if (seen.has(row.chunk_id)) continue;
+    seen.add(row.chunk_id);
+    results.push({
+      articleId: row.article_id ?? row.document_id ?? "",
+      kind: row.article_id ? "kb_article" : "kb_document",
+      chunkId: row.chunk_id,
+      title: row.title,
+      text: bodyFromText(row.text),
+      location: locationFromText(row.text, row.page_no, row.article_id ? row.title : null),
+      score: item.score,
+    });
+  }
+
+  return results;
 }
