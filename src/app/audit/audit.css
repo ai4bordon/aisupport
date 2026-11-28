@@ -1,0 +1,130 @@
+/* Журнал изменений настроек — фирменный стиль Softline.
+   Своих цветов нет: только переменные из src/app/styles/tokens.css. */
+
+.sl-audit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sl-space-4);
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--sl-space-5) var(--sl-space-4);
+  font-family: var(--sl-font-sans);
+  color: var(--sl-text);
+}
+
+.sl-audit__header {
+  display: grid;
+  gap: var(--sl-space-2);
+}
+
+.sl-audit__title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.sl-audit__lead {
+  margin: 0;
+  max-width: 80ch;
+  line-height: 1.5;
+  color: var(--sl-text-secondary);
+}
+
+.sl-audit__back {
+  margin: 0;
+}
+
+.sl-audit__link {
+  color: var(--sl-accent);
+  font-weight: 600;
+}
+
+.sl-audit__link:hover {
+  color: var(--sl-accent-hover);
+}
+
+.sl-audit__link:focus-visible {
+  outline: 3px solid var(--sl-accent);
+  outline-offset: 2px;
+}
+
+.sl-audit__empty {
+  margin: 0;
+  padding: var(--sl-space-4);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text-secondary);
+  line-height: 1.5;
+}
+
+.sl-audit__caption {
+  margin-bottom: var(--sl-space-2);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+}
+
+.sl-audit__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  background: var(--sl-surface);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  overflow: hidden;
+}
+
+.sl-audit__table th,
+.sl-audit__table td {
+  padding: var(--sl-space-2) var(--sl-space-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--sl-divider);
+  overflow-wrap: anywhere;
+}
+
+.sl-audit__table th {
+  background: var(--sl-bg);
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sl-audit__table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Мобильная ширина: таблица превращается в карточки, иначе появляется
+   горизонтальный скролл. */
+@media (max-width: 720px) {
+  .sl-audit__table,
+  .sl-audit__table thead,
+  .sl-audit__table tbody,
+  .sl-audit__table tr,
+  .sl-audit__table th,
+  .sl-audit__table td {
+    display: block;
+    width: 100%;
+  }
+
+  .sl-audit__table thead {
+    display: none;
+  }
+
+  .sl-audit__table tr {
+    border-bottom: 1px solid var(--sl-divider);
+    padding: var(--sl-space-2) 0;
+  }
+
+  .sl-audit__table td {
+    border-bottom: none;
+    padding: var(--sl-space-1) var(--sl-space-3);
+  }
+}

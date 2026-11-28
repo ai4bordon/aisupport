@@ -66,6 +66,13 @@ export function ManagerShell({ children }: { children: ReactNode }) {
                   </li>
                 );
               })}
+              {/* Обратно на стенд: из кабинета уйти было некуда, кроме
+                  адресной строки. Для жюри это тупик. */}
+              <li className="sl-m-nav__item">
+                <Link className="sl-m-nav__link sl-m-nav__link--back" href="/start">
+                  <span className="sl-m-nav__label">На стенд</span>
+                </Link>
+              </li>
             </ul>
           </nav>
         )}

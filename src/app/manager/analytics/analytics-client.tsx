@@ -232,13 +232,20 @@ export function AnalyticsClient() {
         description="От первого сообщения клиента до первого ответа агента по переписке диалога."
       >
         <p className="analytics-headline">
-          {formatDuration(payload.first_response.avg_ms)}
+          {/* Ноль секунд рядом с ориентиром читался как сбой. Различаем
+              два случая: замеров нет вовсе и ответ пришёл мгновенно. */}
+          {payload.first_response.samples === 0
+            ? "нет замеров"
+            : payload.first_response.avg_ms < 1000
+              ? "мгновенный ответ"
+              : formatDuration(payload.first_response.avg_ms)}
         </p>
         <p className="analytics-note">
-          Ориентир 2 минуты — {payload.first_response.meets_target
-            ? "среднее время укладывается в ориентир"
-            : "среднее время не укладывается в ориентир"}
-          . Замеров: {payload.first_response.samples}.
+          {payload.first_response.samples === 0
+            ? "Замеров пока нет: ответы агента ещё не фиксировались по переписке диалога."
+            : `Ориентир 2 минуты — ${payload.first_response.meets_target
+                ? "среднее время укладывается в ориентир"
+                : "среднее время не укладывается в ориентир"}. Замеров: ${payload.first_response.samples}.`}
         </p>
       </ManagerCard>
 

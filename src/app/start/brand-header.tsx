@@ -29,7 +29,6 @@ export function BrandHeader() {
         </p>
       </div>
       <div className="sl-start__header-spacer" />
-      <span className="sl-start__badge">Монтаж продукта</span>
     </header>
   );
 }
