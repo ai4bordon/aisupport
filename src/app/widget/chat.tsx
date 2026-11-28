@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { safeSourceHref } from "@/core/safe-link";
+import { Markdown } from "@/app/components/markdown";
 
 /**
  * Минимальный веб-виджет чата для ручной проверки.
@@ -59,6 +60,41 @@ function storeConversationId(conversationId: string): void {
   } catch {
     // Хранилище недоступно — ход продолжится с идентификатором из ответа.
   }
+}
+
+/**
+ * Текст отказа сервера для клиента.
+ *
+ * Отказ — это не эскалация: «обращение передано менеджеру» здесь врало бы.
+ * Клиенту показывается, что произошло на самом деле, и что делать:
+ * - сессия истекла или доступа нет — ввести код заново;
+ * - превышен лимит — подождать;
+ * - сбой сервера — попробовать позже.
+ *
+ * Фраза про менеджера остаётся только там, где в теле ответа есть
+ * эскалация: тогда обращение действительно принято.
+ */
+function errorTextForStatus(
+  status: number,
+  body: { error?: { code?: string }; escalation?: { summary: string } | null } | null,
+): string {
+  const escalated = body?.escalation?.summary;
+  if (escalated !== undefined && escalated !== null) {
+    return escalated;
+  }
+  if (status === 401 || status === 403) {
+    return "Сессия истекла — обновите страницу и введите код доступа";
+  }
+  if (status === 429) {
+    return "Лимит демо исчерпан — попробуйте позже";
+  }
+  if (status >= 500) {
+    return "Сервис недоступен — попробуйте позже";
+  }
+  if (body?.error?.code === "approval_required") {
+    return "Ответ не прошёл проверку — обращение передано менеджеру.";
+  }
+  return "Не удалось обработать запрос — попробуйте ещё раз.";
 }
 
 export function Chat() {
@@ -153,23 +189,17 @@ export function Chat() {
       }
 
       if (!response.ok || !body) {
-        // Ответ не прошёл проверку: обращение уже ушло менеджеру, и клиент
-        // должен видеть человеческую фразу, а не техническую заглушку.
-        // Само тело ошибки клиенту не показывается — оно для журнала.
-        //
-        // Код `approval_required` означает, что ответ не прошёл проверку и
-        // ушёл менеджеру: клиенту об этом и говорим. Любой другой отказ —
-        // тоже эскалация, но с общей фразой.
-        const escalated =
-          body?.escalation?.summary ??
-          (body?.error?.code === "approval_required"
-            ? "Обращение передано менеджеру."
-            : null);
+        // Отказ сервера — это не эскалация. Клиенту показывается то, что
+        // произошло на самом деле: истёкшая сессия, превышенный лимит или
+        // сбой сервера. Фраза «обращение передано менеджеру» годится
+        // только когда менеджер действительно принял обращение, то есть
+        // когда в теле ответа есть эскалация.
+        const text = errorTextForStatus(response.status, body);
         setMessages((current) => [
           ...current,
           {
             role: "agent",
-            text: escalated ?? "Обращение передано менеджеру.",
+            text,
             escalation: body?.escalation ?? null,
           },
         ]);
@@ -192,7 +222,9 @@ export function Chat() {
         ...current,
         {
           role: "agent",
-          text: body.escalation?.summary ?? "Обращение передано менеджеру.",
+          text:
+            body.escalation?.summary ??
+            "Обращение передано менеджеру — он ответит в рабочее время.",
           escalation: body.escalation ?? null,
         },
       ]);
@@ -226,7 +258,13 @@ export function Chat() {
                 message.role === "client" ? "chat__message chat__message--client" : "chat__message chat__message--agent"
               }
             >
-              <p className="chat__message-text">{message.text}</p>
+              <div className="chat__message-text">
+                {message.role === "agent" ? (
+                  <Markdown source={message.text} />
+                ) : (
+                  message.text
+                )}
+              </div>
 
               {message.sources && message.sources.length > 0 ? (
                 <ul className="chat__sources">

@@ -194,6 +194,105 @@ describe("виджет веб-чата", () => {
     expect(log?.scrollTop).toBe(log?.scrollHeight);
   });
 
+  it("при 401 говорит, что сессия истекла, а не что обращение у менеджера", async () => {
+    // Регрессия живьёма (UX-аудит 28.11): /v1/chat без доступа отдаёт
+    // 401, а виджет на любой не-OK отвечал «Обращение передано
+    // менеджеру» — это неправда: обращение никто не принимал.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "unauthorized", message: "Требуется код доступа" },
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<Chat />);
+    const input = screen.getByLabelText("Сообщение");
+    const send = screen.getByRole("button", { name: "Отправить" });
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    expect(
+      await screen.findByText(/сессия истекла/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/передано менеджеру/i)).toBeNull();
+  });
+
+  it("при 429 говорит о лимите, а при 5xx — о сбое сервера", async () => {
+    const stub = (status: number, code: string) =>
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(JSON.stringify({ error: { code, message: "" } }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+
+    stub(429, "rate_limited");
+    render(<Chat />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Сообщение"), {
+        target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
+    });
+    expect(await screen.findByText(/лимит демо исчерпан/i)).toBeInTheDocument();
+
+    cleanup();
+    stub(503, "upstream_unavailable");
+    render(<Chat />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Сообщение"), {
+        target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
+    });
+    expect(await screen.findByText(/сервис недоступен/i)).toBeInTheDocument();
+  });
+
+  it("при реальной эскалации показывает её текст", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            outcome: "escalate",
+            answer: null,
+            escalation: {
+              reason: "no_confirmed_source",
+              summary: "Передаю ваш вопрос менеджеру.",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<Chat />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Сообщение"), {
+        target: { value: "Вопрос" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
+    });
+
+    expect(await screen.findByText("Передаю ваш вопрос менеджеру.")).toBeInTheDocument();
+  });
+
   it("после первого хода идентификатор диалога запоминается", async () => {
     const server = stubServer();
 
@@ -248,8 +347,11 @@ describe("виджет веб-чата", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/Обращение передано менеджеру/)).toBeInTheDocument();
+      expect(screen.getByText(/не прошёл проверку/i)).toBeInTheDocument();
     });
+    // Фраза про менеджера тут уместна: при 422 обращение действительно
+    // уходит менеджеру. Но технической заглушки быть не должно.
+    expect(screen.getByText(/передано менеджеру/)).toBeInTheDocument();
     // Технической заглушки на экране нет.
     expect(screen.queryByText("Не удалось обработать запрос. Попробуйте позже.")).toBeNull();
   });
