@@ -294,6 +294,74 @@
   gap: var(--sl-space-2);
 }
 
+/* Панель отбора черновиков: поиск и фильтр по статусу. */
+.kn-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin-bottom: var(--sl-space-3);
+}
+
+.kn-control {
+  display: grid;
+  gap: var(--sl-space-1);
+  min-width: 180px;
+}
+
+.kn-control-label {
+  color: var(--sl-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kn-search,
+.kn-select {
+  padding: var(--sl-space-2);
+  border: 1px solid var(--sl-divider);
+  border-radius: var(--sl-radius);
+  background: var(--sl-surface);
+  color: var(--sl-text);
+  font-family: var(--sl-font-sans);
+  font-size: 14px;
+}
+
+/* Подпись под полем выбора файла: своя подпись вместо браузерной
+   английской («No file chosen»). */
+.kn-file-state {
+  margin: 0;
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
+/* Поле выбора файла скрыто: его подпись браузер пишет по-английски. */
+.kn-file--hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Переход между страницами списка черновиков. */
+.kn-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sl-space-2);
+  margin-top: var(--sl-space-3);
+}
+
+.kn-pagination-state {
+  color: var(--sl-text-secondary);
+  font-size: 13px;
+}
+
 @media (max-width: 860px) {
   .kn-item {
     flex-direction: column;

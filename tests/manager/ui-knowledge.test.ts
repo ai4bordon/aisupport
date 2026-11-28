@@ -75,6 +75,7 @@ type DocumentItem = {
 type DraftItem = {
   id: string;
   title: string;
+  body_md: string;
   status: string;
   conversation_id: string | null;
   source_message_ids: string[];
@@ -90,7 +91,6 @@ type KnowledgePayload = {
   documents: DocumentItem[];
   drafts: DraftItem[];
 };
-
 const samplePayload: KnowledgePayload = {
   documents: [
     {
@@ -124,6 +124,7 @@ const samplePayload: KnowledgePayload = {
     {
       id: "draft-1",
       title: "Куда приходят ключи после оплаты",
+      body_md: "Текст материала о ключах лицензии.",
       status: "pending_review",
       conversation_id: "11111111-1111-4111-8111-111111111111",
       source_message_ids: ["22222222-2222-4222-8222-222222222222"],
@@ -276,7 +277,10 @@ describe("состояния раздела «База знаний»", () => {
     expect(
       screen.getByText("Куда приходят ключи после оплаты"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Ждёт решения")).toBeInTheDocument();
+    // Подпись состояния ищется в списке: в фильтре та же подпись стоит
+    // отдельным пунктом выбора.
+    const draftList = screen.getByRole("list", { name: "Черновики статей" });
+    expect(draftList).toHaveTextContent("Ждёт решения");
   });
 
   it("одобряет документ и сообщает об успехе", async () => {
@@ -418,6 +422,201 @@ describe("состояния раздела «База знаний»", () => {
   });
 });
 
+/**
+ * Отбор черновиков: поиск, фильтр по статусу и постраничный показ.
+ *
+ * Отбор делается на клиенте: маршрут отдаёт весь список арендатора, а
+ * разбиение на страницы не должно рвать выдачу на части — материал,
+ * найденный на второй странице, остаётся найденным.
+ */
+describe("отбор черновиков в разделе «База знаний»", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Черновик заданного состояния и заголовка. */
+  function draft(
+    id: string,
+    title: string,
+    status: string,
+    bodyMd = `Текст материала «${title}».`,
+  ): DraftItem {
+    return {
+      id,
+      title,
+      body_md: bodyMd,
+      status,
+      conversation_id: null,
+      source_message_ids: [],
+      source_excerpt: null,
+      owner: "manager",
+      created_at: "2026-11-27T08:00:00.000Z",
+      approved_by: null,
+      reviewed_at: null,
+      published_at: null,
+    };
+  }
+
+  /** Открытие вкладки с черновиками. */
+  async function openDrafts(): Promise<void> {
+    render(createElement(KnowledgeClient));
+    const tab = await screen.findByRole("tab", { name: /Черновики статей/ });
+    fireEvent.click(tab);
+  }
+
+  it("фильтрует список по названию черновика", async () => {
+    mockKnowledgeFetch({
+      payload: {
+        documents: [],
+        drafts: [
+          draft("d-1", "Куда приходят ключи", "pending_review"),
+          draft("d-2", "Условия лицензирования", "pending_review"),
+          draft("d-3", "Возврат оплаты", "pending_review"),
+        ],
+      },
+    });
+    await openDrafts();
+
+    const search = screen.getByRole("searchbox", { name: /Поиск по черновикам/i });
+    fireEvent.change(search, { target: { value: "ключи" } });
+
+    const list = screen.getByRole("list", { name: "Черновики статей" });
+    expect(list).toHaveTextContent("Куда приходят ключи");
+    expect(list).not.toHaveTextContent("Условия лицензирования");
+    expect(list).not.toHaveTextContent("Возврат оплаты");
+  });
+
+  it("фильтрует список по тексту черновика", async () => {
+    mockKnowledgeFetch({
+      payload: {
+        documents: [],
+        drafts: [
+          draft("d-1", "Первая статья", "pending_review", "Ключи приходят на почту"),
+          draft("d-2", "Вторая статья", "pending_review", "Письмо содержит ссылку"),
+        ],
+      },
+    });
+    await openDrafts();
+
+    const search = screen.getByRole("searchbox", { name: /Поиск по черновикам/i });
+    fireEvent.change(search, { target: { value: "почту" } });
+
+    const list = screen.getByRole("list", { name: "Черновики статей" });
+    expect(list).toHaveTextContent("Первая статья");
+    expect(list).not.toHaveTextContent("Вторая статья");
+  });
+
+  it("показывает пустое состояние, когда поиск ничего не нашёл", async () => {
+    mockKnowledgeFetch({
+      payload: {
+        documents: [],
+        drafts: [draft("d-1", "Куда приходят ключи", "pending_review")],
+      },
+    });
+    await openDrafts();
+
+    const search = screen.getByRole("searchbox", { name: /Поиск по черновикам/i });
+    fireEvent.change(search, { target: { value: "несуществующее" } });
+
+    expect(screen.getByText("Ничего не найдено")).toBeInTheDocument();
+  });
+
+  it("фильтрует список по статусу черновика", async () => {
+    mockKnowledgeFetch({
+      payload: {
+        documents: [],
+        drafts: [
+          draft("d-1", "Ждёт решения", "pending_review"),
+          draft("d-2", "Опубликован", "published"),
+          draft("d-3", "Отклонён", "rejected"),
+        ],
+      },
+    });
+    await openDrafts();
+
+    const filter = screen.getByRole("combobox", {
+      name: /Фильтр по статусу черновика/i,
+    });
+    fireEvent.change(filter, { target: { value: "published" } });
+
+    const list = screen.getByRole("list", { name: "Черновики статей" });
+    expect(list).toHaveTextContent("Опубликован");
+    expect(list).not.toHaveTextContent("Ждёт решения");
+    expect(list).not.toHaveTextContent("Отклонён");
+  });
+
+  it("показывает ограниченное число карточек и переходит между страницами", async () => {
+    // Двенадцать черновиков: на странице помещается десять, на второй — два.
+    // Номера с ведущим нулём, чтобы «Материал 01» не был частью «Материал 11».
+    const drafts = Array.from({ length: 12 }, (_, index) =>
+      draft(
+        `d-${index + 1}`,
+        `Материал ${String(index + 1).padStart(2, "0")}`,
+        "pending_review",
+      ),
+    );
+    mockKnowledgeFetch({ payload: { documents: [], drafts } });
+    await openDrafts();
+
+    const list = screen.getByRole("list", { name: "Черновики статей" });
+    expect(list.querySelectorAll("li")).toHaveLength(10);
+    expect(list).toHaveTextContent("Материал 01");
+    expect(list).not.toHaveTextContent("Материал 11");
+
+    // Переход вперёд: вторая страница показывает оставшиеся два материала.
+    fireEvent.click(screen.getByRole("button", { name: "Следующая страница" }));
+
+    expect(list.querySelectorAll("li")).toHaveLength(2);
+    expect(list).toHaveTextContent("Материал 11");
+    expect(list).toHaveTextContent("Материал 12");
+    expect(list).not.toHaveTextContent("Материал 01");
+    expect(screen.getByText("Страница 2 из 2")).toBeInTheDocument();
+
+    // Обратный переход возвращает первую страницу.
+    fireEvent.click(screen.getByRole("button", { name: "Предыдущая страница" }));
+    expect(list.querySelectorAll("li")).toHaveLength(10);
+    expect(screen.getByText("Страница 1 из 2")).toBeInTheDocument();
+  });
+
+  it("сбрасывает страницу на первую при смене поискового запроса", async () => {
+    const drafts = Array.from({ length: 12 }, (_, index) =>
+      draft(
+        `d-${index + 1}`,
+        `Материал ${String(index + 1).padStart(2, "0")}`,
+        "pending_review",
+      ),
+    );
+    mockKnowledgeFetch({ payload: { documents: [], drafts } });
+    await openDrafts();
+
+    fireEvent.click(screen.getByRole("button", { name: "Следующая страница" }));
+    expect(screen.getByText("Страница 2 из 2")).toBeInTheDocument();
+
+    const search = screen.getByRole("searchbox", { name: /Поиск по черновикам/i });
+    fireEvent.change(search, { target: { value: "Материал" } });
+
+    expect(screen.getByText("Страница 1 из 2")).toBeInTheDocument();
+  });
+
+  it("подписывает выбор файла по-русски", async () => {
+    mockKnowledgeFetch();
+    render(createElement(KnowledgeClient));
+
+    // Браузер по умолчанию пишет «No file chosen»: у кабинета своя
+    // подпись под полем, и она русская.
+    expect(await screen.findByText("Файл не выбран")).toBeInTheDocument();
+
+    const input = (await screen.findByLabelText(/файл документа/i)) as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File(["тело"], "reglament.md", { type: "text/markdown" })] },
+    });
+
+    expect(screen.getByText(/Выбран файл «reglament\.md»/)).toBeInTheDocument();
+    expect(screen.queryByText(/No file chosen/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("маршрут данных базы знаний", () => {
   let tenantId = "";
   let otherTenant = "";
@@ -507,6 +706,79 @@ describe("маршрут данных базы знаний", () => {
     expect(pending?.status).toBe("pending");
     expect(pending?.chunks_count).toBe(6);
     expect(pending?.created_at).toBe("2026-11-27T10:00:00.000Z");
+  });
+
+  it("отдаёт полный текст черновика: по нему идёт поиск по статье", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/manager/knowledge", {
+        headers: { cookie },
+      }),
+    );
+    const body = (await response.json()) as KnowledgePayload;
+    const draft = body.drafts.find((item) => item.title === "Куда приходят ключи");
+    expect(draft?.body_md).toBe("Текст материала");
+  });
+
+  it("фильтрует черновики по статусу", async () => {
+    const response = await GET(
+      new Request(
+        "http://localhost/api/manager/knowledge?status=published",
+        { headers: { cookie } },
+      ),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as KnowledgePayload;
+    expect(body.drafts.map((item) => item.title)).toEqual([
+      "Условия лицензирования",
+    ]);
+  });
+
+  it("разбивает черновики на страницы по limit и offset", async () => {
+    const first = await GET(
+      new Request("http://localhost/api/manager/knowledge?limit=1&offset=0", {
+        headers: { cookie },
+      }),
+    );
+    const firstBody = (await first.json()) as KnowledgePayload;
+    expect(firstBody.drafts.map((item) => item.title)).toEqual([
+      "Куда приходят ключи",
+    ]);
+
+    const second = await GET(
+      new Request("http://localhost/api/manager/knowledge?limit=1&offset=1", {
+        headers: { cookie },
+      }),
+    );
+    const secondBody = (await second.json()) as KnowledgePayload;
+    expect(secondBody.drafts.map((item) => item.title)).toEqual([
+      "Условия лицензирования",
+    ]);
+  });
+
+  it("отдаёт весь список без параметров: вызов по умолчанию не сломан", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/manager/knowledge", {
+        headers: { cookie },
+      }),
+    );
+    const body = (await response.json()) as KnowledgePayload;
+    expect(body.drafts).toHaveLength(2);
+  });
+
+  it("отклоняет неверные параметры выборки", async () => {
+    const badLimit = await GET(
+      new Request("http://localhost/api/manager/knowledge?limit=0", {
+        headers: { cookie },
+      }),
+    );
+    expect(badLimit.status).toBe(400);
+
+    const badOffset = await GET(
+      new Request("http://localhost/api/manager/knowledge?offset=-1", {
+        headers: { cookie },
+      }),
+    );
+    expect(badOffset.status).toBe(400);
   });
 
   it("возвращает пустые массивы для пустых таблиц", async () => {

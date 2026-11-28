@@ -52,6 +52,13 @@ type KnowledgeDocument = {
 type KnowledgeDraft = {
   id: string;
   title: string;
+  /**
+   * Полный текст материала.
+   *
+   * В списке нужен для поиска по тексту: иначе менеджер ищет только по
+   * заголовку и не находит материал по фразе из статьи.
+   */
+  body_md: string;
   status: string;
   conversation_id: string | null;
   source_message_ids: string[];
@@ -67,6 +74,7 @@ type KnowledgeDraft = {
 type ArticleRow = {
   id: string;
   title: string;
+  body_md: string;
   status: string;
   conversation_id: string | null;
   source_message_ids: unknown;
@@ -105,6 +113,61 @@ function messageIds(value: unknown): string[] {
   return value.map((item) => String(item));
 }
 
+/**
+ * Разбор параметров выборки списка черновиков.
+ *
+ * Параметры необязательны: вызов без них отдаёт весь список, как и раньше.
+ * `status` сужает список по состоянию материала, `limit` задаёт размер
+ * страницы, `offset` — сколько записей пропустить. Размер страницы
+ * ограничен сверху: маршрут не должен отдавать кабинету всю базу одним
+ * ответом.
+ */
+const MAX_DRAFTS_PAGE_SIZE = 100;
+
+type DraftsQuery = {
+  status: string | null;
+  limit: number | null;
+  offset: number;
+};
+
+/** Ошибка разбора параметров выборки: клиентский ввод неверен. */
+class QueryError extends Error {}
+
+/**
+ * Чтение параметров выборки из адреса запроса.
+ *
+ * Пустые и отсутствующие параметры — обычный вызов без выборки. Неверное
+ * значение — ошибка ввода, а не молчаливая подмена.
+ */
+function readDraftsQuery(request: Request): DraftsQuery {
+  const params = new URL(request.url).searchParams;
+  const rawStatus = params.get("status")?.trim() ?? "";
+  const rawLimit = params.get("limit")?.trim() ?? "";
+  const rawOffset = params.get("offset")?.trim() ?? "";
+
+  const status = rawStatus.length > 0 ? rawStatus : null;
+
+  let limit: number | null = null;
+  if (rawLimit.length > 0) {
+    const parsed = Number(rawLimit);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new QueryError("Параметр limit должен быть целым числом больше нуля");
+    }
+    limit = Math.min(parsed, MAX_DRAFTS_PAGE_SIZE);
+  }
+
+  let offset = 0;
+  if (rawOffset.length > 0) {
+    const parsed = Number(rawOffset);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw new QueryError("Параметр offset должен быть целым числом не меньше нуля");
+    }
+    offset = parsed;
+  }
+
+  return { status, limit, offset };
+}
+
 /** Тело решения менеджера по черновику. */
 type DecisionBody = {
   draft_id?: string;
@@ -125,6 +188,21 @@ export async function GET(request: Request): Promise<Response> {
       "Требуется доступ менеджера",
       requestId,
     );
+  }
+
+  let query: DraftsQuery;
+  try {
+    query = readDraftsQuery(request);
+  } catch (error) {
+    if (error instanceof QueryError) {
+      return errorResponse(
+        400,
+        "validation_error",
+        error.message,
+        requestId,
+      );
+    }
+    throw error;
   }
 
   let tenantId: string;
@@ -158,18 +236,47 @@ export async function GET(request: Request): Promise<Response> {
     // Статьи читаются напрямую: публичного списка у модуля черновиков нет,
     // а кабинету нужен весь список арендатора — и ждущие решения, и уже
     // опубликованные.
+    //
+    // Выборка (`status`, `limit`, `offset`) — по черновикам: список
+    // документов кабинету нужен целиком, а черновиков может быть много.
+    const conditions: string[] = ["tenant_id = $1"];
+    const values: unknown[] = [tenantId];
+    if (query.status) {
+      values.push(query.status);
+      conditions.push(`status = $${values.length}`);
+    }
+
+    const where = conditions.join(" AND ");
+    const countResult = await getPool().query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM kb_articles WHERE ${where}`,
+      values,
+    );
+    const total = Number(countResult.rows[0]?.total ?? 0);
+
+    const pageValues = [...values];
+    let pageClause = "";
+    if (query.limit !== null) {
+      pageValues.push(query.limit);
+      pageClause += ` LIMIT $${pageValues.length}`;
+    }
+    if (query.offset > 0) {
+      pageValues.push(query.offset);
+      pageClause += ` OFFSET $${pageValues.length}`;
+    }
+
     const articles = await getPool().query<ArticleRow>(
-      `SELECT id, title, status, conversation_id, source_message_ids,
+      `SELECT id, title, body_md, status, conversation_id, source_message_ids,
               source_excerpt, owner, created_at, approved_by, reviewed_at, published_at
          FROM kb_articles
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC, id DESC`,
-      [tenantId],
+        WHERE ${where}
+        ORDER BY created_at DESC, id DESC${pageClause}`,
+      pageValues,
     );
 
     const drafts: KnowledgeDraft[] = articles.rows.map((row) => ({
       id: row.id,
       title: row.title,
+      body_md: row.body_md,
       status: row.status,
       conversation_id: row.conversation_id,
       source_message_ids: messageIds(row.source_message_ids),
@@ -181,7 +288,13 @@ export async function GET(request: Request): Promise<Response> {
       published_at: row.published_at?.toISOString() ?? null,
     }));
 
-    return Response.json({ documents, drafts });
+    return Response.json({
+      documents,
+      drafts,
+      // Всего черновиков под фильтром: клиент рисует по этому числу
+      // последнюю страницу и не показывает лишние кнопки перехода.
+      drafts_total: total,
+    });
   } catch {
     return errorResponse(
       503,
