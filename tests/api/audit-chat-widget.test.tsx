@@ -129,7 +129,7 @@ describe("виджет веб-чата", () => {
   it("показывает, что агент печатает, пока ответа нет", async () => {
     // Регрессия живьёма (UX-аудит 28.11): кнопка «Отправить» гасла, и
     // две-три секунды тишины читались как зависание.
-    let release: (() => void) | null = null;
+    let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -162,7 +162,7 @@ describe("виджет веб-чата", () => {
 
     expect(await screen.findByText("Агент печатает…")).toBeInTheDocument();
 
-    release?.();
+    release();
     await waitFor(() => {
       expect(screen.queryByText("Агент печатает…")).toBeNull();
     });
