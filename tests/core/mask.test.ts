@@ -139,9 +139,11 @@ describe("маскирование персональных данных", () =>
     expect(maskedText).toContain("⟦BANK_1⟧");
 
     const restored = restoreMaskedData("Проверьте карту ⟦BANK_1⟧", mapping);
-    expect(restored).toBe("Проверьте карту ⟦BANK_1⟧");
+    // Ни цифр, ни сырой метки: клиенту показывается понятная фраза.
+    expect(restored).toBe("Проверьте карту номер карты скрыт");
     expect(restored).not.toContain("4276");
     expect(restored).not.toContain("9012");
+    expect(restored).not.toContain("⟦");
   });
 
   it("остальные персональные данные восстанавливаются как раньше", () => {

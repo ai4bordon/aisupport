@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateAnswer } from "@/core/validate";
+import { redactPersonalData, validateAnswer } from "@/core/validate";
 import type { Source } from "@/contracts/chat";
 
 /**
@@ -199,6 +199,26 @@ describe("валидатор сумм сверяет текст ответа, а
     expect(result.violations.map((violation) => violation.code)).toContain(
       "raw_pii_in_outgoing",
     );
+  });
+
+  it("редакция вырезает выдуманный контакт из ответа", () => {
+    // Регрессия живьёма (аудит 28.11): модель назвала адрес поддержки,
+    // которого нет в источниках. Ответ уходил в эскалацию (422), хотя по
+    // существу был верным.
+    const result = redactPersonalData(
+      "Для связи пишите на support@example.com — мы поможем.",
+    );
+
+    expect(result.redacted).toBe(true);
+    expect(result.text).not.toContain("support@example.com");
+    expect(result.text).toContain("контакт скрыт");
+  });
+
+  it("редакция ответа без персональных данных ничего не меняет", () => {
+    const result = redactPersonalData("Лицензия выдаётся в личном кабинете.");
+
+    expect(result.redacted).toBe(false);
+    expect(result.text).toBe("Лицензия выдаётся в личном кабинете.");
   });
 
   it("нарушение по сумме называет саму сумму в detail", () => {

@@ -15,7 +15,22 @@ import {
   recordShadowDraft,
   SHADOW_REASON,
 } from "@/core/shadow-mode";
-import { validateOutgoingText } from "@/core/validate";
+import { redactPersonalData, validateOutgoingText } from "@/core/validate";
+
+/**
+ * Единственное ли нарушение — персональные данные в исходящем тексте.
+ *
+ * Нарушения сумм и цитат так не чинятся: выдуманная сумма или цитата не из
+ * источников — другой разговор, и такой ответ уходит менеджеру.
+ */
+function isOnlyPersonalDataViolation(result: {
+  violations: Array<{ code: string }>;
+}): boolean {
+  return (
+    result.violations.length === 1 &&
+    result.violations[0]?.code === "raw_pii_in_outgoing"
+  );
+}
 
 /**
  * POST /v1/chat — веб-чат (docs/api-contract.md §4).
@@ -665,11 +680,34 @@ export async function POST(request: Request): Promise<Response> {
     // Проверяются только персональные данные: источник для ответа без
     // фактов (приветствие, уточняющий вопрос) не требуется, а факты
     // подтверждены источниками ещё в ядре.
-    const outgoing = validateOutgoingText(
+    let outgoing = validateOutgoingText(
       restored,
       Object.values(masked.mapping),
       restoredSources.map((source) => source.text),
     );
+
+    // Ответ с единственным нарушением по персональным данным правится
+    // детерминированно: значения вырезаются, а на их место встаёт «контакт
+    // скрыт». Модель иногда называет контакт, которого нет в источниках, —
+    // ответ по существу верный, и отправлять клиенту «не обработано» вместо
+    // него незачем. Если после правки остаются другие нарушения (сумма,
+    // цитата), ответ уходит менеджеру.
+    let outgoingText = restored;
+    if (!outgoing.valid && isOnlyPersonalDataViolation(outgoing)) {
+      const edited = redactPersonalData(restored);
+      if (edited.redacted) {
+        const rechecked = validateOutgoingText(
+          edited.text,
+          Object.values(masked.mapping),
+          restoredSources.map((source) => source.text),
+        );
+        if (rechecked.valid) {
+          outgoing = rechecked;
+          outgoingText = edited.text;
+        }
+      }
+    }
+
     if (!outgoing.valid) {
       const summary =
         "Ответ не прошёл проверку на персональные данные — передаём менеджеру.";
@@ -799,7 +837,7 @@ export async function POST(request: Request): Promise<Response> {
         message_id: messageId,
         outcome: "respond",
         answer: {
-          text: restored,
+          text: outgoingText,
           sources: restoredSources.map((source) => ({
             kind: source.kind,
             id: source.id,

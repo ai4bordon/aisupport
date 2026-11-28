@@ -479,6 +479,18 @@ const CLASSES_HIDDEN_FROM_CLIENT: ReadonlySet<MaskClass> = new Set<MaskClass>([
 ]);
 
 /**
+ * Человеческий текст вместо скрытой метки.
+ *
+ * Клиенту показывать «карта ⟦BANK_1⟧» нельзя: метка в ответе выглядит как
+ * сбой. Вместо неё — понятная фраза о том, что данные скрыты.
+ */
+const HIDDEN_CLASS_TEXT: Record<string, string> = {
+  BANK: "номер карты скрыт",
+  SNILS: "СНИЛС скрыт",
+  PASSPORT: "паспортные данные скрыты",
+};
+
+/**
  * Восстановление масок в тексте.
  *
  * @param text текст с метками.
@@ -492,8 +504,9 @@ export function restoreMaskedData(
 ): string {
   return text.replace(/⟦([A-Z]+)_(\d+)⟧/gu, (label, kind: string) => {
     if (skipClasses.has(kind as MaskClass)) {
-      // Метка остаётся меткой: значение клиенту не показывается.
-      return label;
+      // Значение клиенту не показывается, но и сырая метка в ответе не
+      // остаётся: вместо неё — понятная фраза.
+      return HIDDEN_CLASS_TEXT[kind] ?? "данные скрыты";
     }
     return mapping[label] ?? label;
   });
