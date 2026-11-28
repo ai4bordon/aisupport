@@ -347,13 +347,10 @@ export function validateAnswer(
   //
   // Правило то же, что в `validateOutgoingText`.
   const knownValues = new Set(allowedPersonalValues.map((value) => value.toLowerCase()));
-  const sourceHaystack = sources.map((source) => source.text.toLowerCase()).join("\n");
-  const leaked = findRawPersonalDataValues(answer.text).filter((value) => {
-    const lower = value.toLowerCase();
-    if (knownValues.has(lower)) return false;
-    if (sourceHaystack.includes(lower)) return false;
-    return true;
-  });
+  const personalSourceTexts = sources.map((source) => source.text);
+  const leaked = findRawPersonalDataValues(answer.text).filter(
+    (value) => !isKnownPersonalValue(value, knownValues, personalSourceTexts),
+  );
   if (leaked.length > 0) {
     violations.push({
       code: "raw_pii_in_outgoing",
@@ -362,6 +359,57 @@ export function validateAnswer(
   }
 
   return { valid: violations.length === 0, violations };
+}
+
+/**
+ * Известно ли это значение: оно принадлежит клиенту или есть в источниках.
+ *
+ * Сравнение идёт по нормализованному виду, а не по сырой строке: модель
+ * пишет телефон из статьи то «8 800 555 35 35», то «8-800-555-35-35», и
+ * при сравнении по символам значение из источника не находилось — ответ
+ * уходил в эскалацию.
+ *
+ * Числовые значения (телефон, карта, СНИЛС, ИНН, паспорт) сравниваются по
+ * цифрам: разделители в записи не несут смысла. Остальные — по нижнему
+ * регистру и без лишних пробелов.
+ */
+function isKnownPersonalValue(
+  value: string,
+  knownValues: ReadonlySet<string>,
+  sourceTexts: readonly string[],
+): boolean {
+  const lower = value.toLowerCase();
+  if (knownValues.has(lower)) {
+    return true;
+  }
+
+  const digits = value.replace(/\D/gu, "");
+  const letters = value.replace(/[^\p{L}]/gu, "");
+  // Числовое значение: сравниваем по цифрам.
+  if (digits.length >= 9 && letters.length === 0) {
+    const knownDigits = new Set(
+      [...knownValues]
+        .map((known) => known.replace(/\D/gu, ""))
+        .filter((known) => known.length >= 9),
+    );
+    if (knownDigits.has(digits)) {
+      return true;
+    }
+    return sourceTexts.some((text) => {
+      const compact = text.replace(/\D/gu, "");
+      // Цифры идут подряд в источнике: ищем ту же последовательность.
+      return compact.includes(digits);
+    });
+  }
+
+  const spaced = value.replace(/\s+/gu, " ").trim();
+  const sourceHaystack = sourceTexts.map((text) => text.toLowerCase()).join("\n");
+  if (sourceHaystack.includes(lower) || sourceHaystack.includes(spaced)) {
+    return true;
+  }
+  return [...knownValues].some(
+    (known) => known.replace(/\s+/gu, " ").trim() === spaced,
+  );
 }
 
 /**

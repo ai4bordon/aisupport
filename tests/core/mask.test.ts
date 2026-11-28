@@ -155,6 +155,23 @@ describe("маскирование персональных данных", () =>
     expect(restored).toBe("Письмо на ivanov@example.com");
   });
 
+  it("название заказчика не считается персональными данными", () => {
+    // Регрессия живьёма (аудит 28.11): ответ «в личном кабинете АО
+    // «Софтлайн»» маскировался как организация, и проверка персональных
+    // данных отвергала его как утечку — вопрос про пароль то отвечал, то
+    // уходил в эскалацию.
+    for (const text of [
+      "В личном кабинете ПАО «Софтлайн».",
+      "В личном кабинете АО «Софтлайн».",
+      "Обратитесь в поддержку Софтлайн.",
+      "Обратитесь в поддержку Softline.",
+    ]) {
+      const { maskedText } = maskPersonalData(text);
+      expect(maskedText, text).not.toContain("⟦ORG_");
+      expect(findRawPersonalDataValues(text), text).toEqual([]);
+    }
+  });
+
   it("текст без ПД не меняется", () => {
     const text = "Как получить электронную лицензию?";
     const { maskedText, maskedFieldsCount } = maskPersonalData(text);
