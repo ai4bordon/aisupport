@@ -44,6 +44,15 @@
   overflow-y: auto;
 }
 
+/* Индикатор набора ответа: клиент видит, что агент думает, а не что
+   виджет завис. */
+.chat__typing {
+  margin: 0;
+  color: var(--sl-text-muted);
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
 .chat__hint {
   margin: 0;
   color: var(--sl-text-muted);
