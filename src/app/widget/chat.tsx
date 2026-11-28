@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { safeSourceHref } from "@/core/safe-link";
+import { Markdown } from "@/app/components/markdown";
 
 /**
  * Минимальный веб-виджет чата для ручной проверки.
@@ -226,7 +227,13 @@ export function Chat() {
                 message.role === "client" ? "chat__message chat__message--client" : "chat__message chat__message--agent"
               }
             >
-              <p className="chat__message-text">{message.text}</p>
+              <div className="chat__message-text">
+                {message.role === "agent" ? (
+                  <Markdown source={message.text} />
+                ) : (
+                  message.text
+                )}
+              </div>
 
               {message.sources && message.sources.length > 0 ? (
                 <ul className="chat__sources">
