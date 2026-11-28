@@ -228,11 +228,67 @@ describe("POST /v1/chat", () => {
 
     const first = await POST(chatRequest(payload));
     const firstBody = (await first.json()) as { message_id: string };
-    const second = await POST(chatRequest(payload));
+    // Повтор идёт с подписанной cookie: без cookie сервер не продолжает
+    // существующий диалог (см. тест с кодом `conversation_cookie_required`).
+    const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0];
+    const second = await POST(chatRequest(payload, cookie));
     const secondBody = (await second.json()) as { message_id: string };
 
     expect(secondBody.message_id).toBe(firstBody.message_id);
 
+    const messages = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM messages WHERE tenant_id = $1 AND role = 'client'",
+      [tenantId],
+    );
+    expect(Number(messages.rows[0]?.count ?? "0")).toBe(1);
+  });
+
+  /**
+   * Продолжение диалога без подписанной cookie невозможно: cookie —
+   * единственное подтверждение принадлежности диалога клиенту. Если клиент
+   * прислал `conversation_id` уже существующего диалога арендатора, сервер
+   * отвечает `409 conversation_cookie_required` и новый диалог не создаёт.
+   */
+  it("два POST с одинаковым conversation_id без cookie: второй даёт 409 conversation_cookie_required", async () => {
+    const conversationId = "51a00000-1111-4111-8111-111111111111";
+
+    const first = await POST(
+      chatRequest({
+        conversation_id: conversationId,
+        message: {
+          client_message_id: "51a00000-2222-4222-8222-222222222222",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    expect(first.status).toBe(200);
+
+    const second = await POST(
+      chatRequest({
+        conversation_id: conversationId,
+        message: {
+          client_message_id: "51a00000-3333-4333-8333-333333333333",
+          text: "Как получить электронную лицензию?",
+        },
+      }),
+    );
+
+    expect(second.status).toBe(409);
+    const body = (await second.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(body.error.code).toBe("conversation_cookie_required");
+    expect(body.error.message).toContain("требует входа");
+
+    // Новый диалог не создан: у арендатора ровно один диалог.
+    const conversations = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM conversations WHERE tenant_id = $1",
+      [tenantId],
+    );
+    expect(Number(conversations.rows[0]?.count ?? "0")).toBe(1);
+
+    // Второй ход не записан: переписка диалога не изменилась.
     const messages = await testPool().query<{ count: string }>(
       "SELECT count(*)::text AS count FROM messages WHERE tenant_id = $1 AND role = 'client'",
       [tenantId],
@@ -363,6 +419,133 @@ describe("POST /v1/chat", () => {
     expect(secondBody.answer?.sources.some((source) => source.kind === "catalog_product")).toBe(
       true,
     );
+  });
+
+  it("четыре хода с cookie идут в одном диалоге, контекст помнится", async () => {
+    // С подписанной cookie диалог один и тот же: агент накапливает слоты
+    // (продукт, количество, срок) и помнит их между ходами.
+    const conversationId = "51b00000-1111-4111-8111-111111111111";
+    // Класс `product_known` ведёт на маршрут каталога: подбор по названию
+    // с уточняющими вопросами по слотам.
+    setModelClient(okModel(ARTICLE_TEXT, [ARTICLE_TEXT], "product_known"));
+
+    // Ход 1: клиент называет продукт — агент спрашивает количество.
+    const first = await POST(
+      chatRequest({
+        conversation_id: conversationId,
+        message: {
+          client_message_id: "51b00000-2222-4222-8222-222222222222",
+          text: "Нужен Adobe InCopy",
+        },
+      }),
+    );
+    expect(first.status).toBe(200);
+    const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0];
+    expect(cookie).toContain("support_conversation=");
+    const firstBody = (await first.json()) as {
+      conversation_id: string;
+      outcome: string;
+      answer: { text: string } | null;
+    };
+    expect(firstBody.conversation_id).toBe(conversationId);
+    expect(firstBody.outcome).toBe("respond");
+    expect(firstBody.answer?.text).toContain("Сколько лицензий");
+
+    // Ход 2: количество названо — агент спрашивает срок.
+    const second = await POST(
+      chatRequest(
+        {
+          conversation_id: conversationId,
+          message: {
+            client_message_id: "51b00000-3333-4333-8333-333333333333",
+            text: "Нужно 10 штук",
+          },
+        },
+        cookie,
+      ),
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as {
+      conversation_id: string;
+      outcome: string;
+      answer: { text: string } | null;
+    };
+    expect(secondBody.conversation_id).toBe(conversationId);
+    expect(secondBody.outcome).toBe("respond");
+    // Слот количества закрыт: агент больше не спрашивает о количестве.
+    expect(secondBody.answer?.text).not.toContain("Сколько лицензий");
+    expect(secondBody.answer?.text).toContain("На какой срок");
+
+    // Ход 3: срок назван — агент спрашивает про развёртывание.
+    const third = await POST(
+      chatRequest(
+        {
+          conversation_id: conversationId,
+          message: {
+            client_message_id: "51b00000-4444-4444-8444-444444444444",
+            text: "На 12 месяцев",
+          },
+        },
+        cookie,
+      ),
+    );
+    expect(third.status).toBe(200);
+    const thirdBody = (await third.json()) as {
+      conversation_id: string;
+      outcome: string;
+      answer: { text: string } | null;
+    };
+    expect(thirdBody.conversation_id).toBe(conversationId);
+    expect(thirdBody.outcome).toBe("respond");
+    expect(thirdBody.answer?.text).toContain("Как разворачиваем");
+
+    // Ход 4: данных достаточно — агент отвечает по позиции каталога.
+    // Текст хода без заглавной буквы: слово с большой буквы агент считает
+    // названием продукта (эвристика разбора запроса), а здесь это ответ на
+    // вопрос о развёртывании, а не название.
+    const fourth = await POST(
+      chatRequest(
+        {
+          conversation_id: conversationId,
+          message: {
+            client_message_id: "51b00000-5555-4555-8555-555555555555",
+            text: "разворачиваем на сервере заказчика",
+          },
+        },
+        cookie,
+      ),
+    );
+    expect(fourth.status).toBe(200);
+    const fourthBody = (await fourth.json()) as {
+      conversation_id: string;
+      outcome: string;
+      answer: { text: string; sources: { kind: string }[] } | null;
+    };
+    expect(fourthBody.conversation_id).toBe(conversationId);
+    expect(fourthBody.outcome).toBe("respond");
+    expect(fourthBody.answer?.text).toContain("Adobe InCopy");
+    expect(fourthBody.answer?.sources.some((source) => source.kind === "catalog_product")).toBe(
+      true,
+    );
+
+    // Контекст диалога сохранён: продукт, количество, срок и развёртывание
+    // лежат в слотах диалога и пережили отдельные сообщения.
+    const slots = await testPool().query<{ slot: string; value: string }>(
+      "SELECT slot, value FROM conversation_slots WHERE conversation_id = $1",
+      [conversationId],
+    );
+    const saved = new Map(slots.rows.map((row) => [row.slot, row.value]));
+    expect(saved.get("productQuery")?.toLowerCase()).toContain("incopy");
+    expect(saved.get("quantity")).toBe("10");
+    expect(saved.get("termMonths")).toBe("12");
+    expect(saved.get("deployment")).toBe("сервер");
+
+    // Четыре хода клиента — в одном диалоге.
+    const messages = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM messages WHERE conversation_id = $1 AND role = 'client'",
+      [conversationId],
+    );
+    expect(Number(messages.rows[0]?.count ?? "0")).toBe(4);
   });
 
   it("conversation_id, не совпадающий с cookie, даёт 403", async () => {

@@ -470,6 +470,29 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Продолжение диалога без подписанной cookie невозможно: cookie —
+  // единственное подтверждение принадлежности диалога клиенту. Если клиент
+  // прислал `conversation_id` уже существующего диалога, но cookie нет
+  // (потеряна, истекла, подделана), сервер не продолжает диалог и не создаёт
+  // новый: клиенту предлагается войти заново.
+  //
+  // Проверка стоит до поиска повтора: повтор хода без cookie — это тоже
+  // чтение чужого диалога по одному лишь знанию идентификатора.
+  if (!cookieConversation) {
+    const existing = await pool.query<{ id: string }>(
+      "SELECT id FROM conversations WHERE id = $1 AND tenant_id = $2",
+      [body.conversation_id, tenantId],
+    );
+    if (existing.rows[0]) {
+      return errorResponse(
+        409,
+        "conversation_cookie_required",
+        "Продолжение диалога требует входа: обновите страницу и введите код доступа",
+        requestId,
+      );
+    }
+  }
+
   // Идемпотентность: повтор client_message_id не создаёт второе обращение.
   // Повтор распознаётся по ключу хода (арендатор, диалог, сообщение) и
   // возвращает ответ именно этого сообщения.
