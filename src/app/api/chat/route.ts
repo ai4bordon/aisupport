@@ -15,22 +15,12 @@ import {
   recordShadowDraft,
   SHADOW_REASON,
 } from "@/core/shadow-mode";
-import { redactPersonalData, validateOutgoingText } from "@/core/validate";
+import {
+  isOnlyPersonalDataViolation,
+  redactPersonalData,
+  validateOutgoingText,
+} from "@/core/validate";
 
-/**
- * Единственное ли нарушение — персональные данные в исходящем тексте.
- *
- * Нарушения сумм и цитат так не чинятся: выдуманная сумма или цитата не из
- * источников — другой разговор, и такой ответ уходит менеджеру.
- */
-function isOnlyPersonalDataViolation(result: {
-  violations: Array<{ code: string }>;
-}): boolean {
-  return (
-    result.violations.length === 1 &&
-    result.violations[0]?.code === "raw_pii_in_outgoing"
-  );
-}
 
 /**
  * POST /v1/chat — веб-чат (docs/api-contract.md §4).

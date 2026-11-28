@@ -211,7 +211,7 @@ describe("валидатор сумм сверяет текст ответа, а
 
     expect(result.redacted).toBe(true);
     expect(result.text).not.toContain("support@example.com");
-    expect(result.text).toContain("контакт скрыт");
+    expect(result.text).toContain("(скрыто)");
   });
 
   it("телефон из источника узнаётся при другом формате записи", () => {

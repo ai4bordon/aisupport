@@ -413,6 +413,21 @@ function isKnownPersonalValue(
 }
 
 /**
+ * Единственное ли нарушение — персональные данные в исходящем тексте.
+ *
+ * Нарушения сумм и цитат так не чинятся: выдуманная сумма или цитата не из
+ * источников — другой разговор, и такой ответ уходит менеджеру.
+ */
+export function isOnlyPersonalDataViolation(result: {
+  violations: Array<{ code: string }>;
+}): boolean {
+  return (
+    result.violations.length === 1 &&
+    result.violations[0]?.code === "raw_pii_in_outgoing"
+  );
+}
+
+/**
  * Детерминированная редакция ответа с единственным нарушением по ПД.
  *
  * Модель иногда называет контакт, которого нет в источниках: адрес
@@ -439,7 +454,7 @@ export function redactPersonalData(text: string): {
   }
   let redacted = text;
   for (const value of values) {
-    redacted = redacted.split(value).join("контакт скрыт");
+    redacted = redacted.split(value).join("(скрыто)");
   }
   return { text: redacted, redacted: true };
 }

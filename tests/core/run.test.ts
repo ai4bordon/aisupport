@@ -275,6 +275,36 @@ describe("ядро агента", () => {
     expect((violations as string[] | undefined)?.join(",")).toContain("amount_not_in_source");
   });
 
+  it("ответ с выдуманным контактом правится и уходит клиенту", async () => {
+    // Регрессия живьёма (аудит 28.11): вопрос «Как восстановить пароль?»
+    // то отвечал, то уходил в эскалацию. Модель называла контакт, которого
+    // нет в источниках, и валидатор справедливо отвергал такой ответ. Теперь
+    // значение вырезается, и клиент получает ответ без контакта.
+    setModelClient(
+      okModel(
+        "Восстановить пароль можно в личном кабинете, пишите на support@example.com.",
+        [],
+        [],
+      ),
+    );
+
+    const outcome = await runAgent({
+      conversationId,
+      messageId: "77777777-7777-4777-8777-777777777777",
+      channel: "web",
+      externalChatId: null,
+      text: "Сколько стоит лицензия?",
+      maskedFieldsCount: 0,
+      tenantId,
+    });
+
+    expect(outcome.outcome).toBe("respond");
+    if (outcome.outcome !== "respond") return;
+    expect(outcome.answer.text).not.toContain("support@example.com");
+    expect(outcome.answer.text).toContain("(скрыто)");
+    expect(outcome.answer.text).not.toContain("⟦");
+  });
+
   it("трасса содержит узлы classify, retrieve, validate и respond|escalate", async () => {
     setModelClient(okModel(ARTICLE_TEXT, [], [ARTICLE_TEXT]));
 

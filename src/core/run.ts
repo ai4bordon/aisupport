@@ -28,7 +28,13 @@ import {
 import { stripSourceMarkers, stripUrls } from "@/core/no-urls";
 import { dropDuplicateGreeting } from "@/core/greeting";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
-import { extractNumbers, validateAnswer, validatePromise } from "@/core/validate";
+import {
+  extractNumbers,
+  isOnlyPersonalDataViolation,
+  redactPersonalData,
+  validateAnswer,
+  validatePromise,
+} from "@/core/validate";
 import {
   candidateFromAnswer,
   extractPromise,
@@ -1095,7 +1101,11 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
 
   // Узел 5: валидация ответа.
   const validateStartedAt = nowMs();
-  const validation = validateAnswer(
+  const allowedNumbers = [
+    ...extractNumbers(input.text),
+    ...clientHistoryNumbers(history),
+  ];
+  let validation = validateAnswer(
     { text: generatedText, amounts: generatedAmounts, citations: generatedCitations },
     sources,
     [],
@@ -1107,8 +1117,32 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     // диалога модель вправе сослаться на то, что клиент называл раньше
     // («на 50 мест, как вы просили»). Такое число подтверждено самим
     // клиентом, а не выдумано моделью.
-    [...extractNumbers(input.text), ...clientHistoryNumbers(history)],
+    allowedNumbers,
   );
+
+  // Ответ с единственным нарушением по персональным данным правится
+  // детерминированно: значения вырезаются, на их место встаёт «(скрыто)», и
+  // ответ проверяется заново.
+  //
+  // Без этого вопрос вроде «Как восстановить пароль?» то отвечал, то уходил
+  // в эскалацию: модель называла контакт из своей памяти, и клиент вместо
+  // ответа получал «не обработано». Нарушения сумм и цитат так не чинятся:
+  // выдуманная сумма — другой разговор, и такой ответ уходит менеджеру.
+  if (!validation.valid && isOnlyPersonalDataViolation(validation)) {
+    const edited = redactPersonalData(generatedText);
+    if (edited.redacted) {
+      const rechecked = validateAnswer(
+        { text: edited.text, amounts: generatedAmounts, citations: generatedCitations },
+        sources,
+        [],
+        allowedNumbers,
+      );
+      if (rechecked.valid) {
+        generatedText = edited.text;
+        validation = rechecked;
+      }
+    }
+  }
   await pushStep({
     node: "validate",
     endpoint: null,
