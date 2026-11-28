@@ -21,6 +21,7 @@ import {
 } from "@/core/catalog-lookup";
 import { loadSlots, saveSlots } from "@/core/slots";
 import { stripSourceMarkers, stripUrls } from "@/core/no-urls";
+import { dropDuplicateGreeting } from "@/core/greeting";
 import { escalationMode, noSourceAnswer } from "@/core/escalation-mode";
 import { extractNumbers, validateAnswer, validatePromise } from "@/core/validate";
 import {
@@ -1250,7 +1251,17 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     outcome: "respond",
     // Ссылки и служебные маркеры источников в текст ответа не попадают:
     // они остаются в `sources`, в трассе и в кабинете менеджера.
-    answer: { text: stripSourceMarkers(stripUrls(outgoingText)), sources },
+    //
+    // Приветствие из ответа убирается, если клиент уже поздоровался в
+    // вопросе: иначе «Здравствуйте» дублировалось в вопросе и в ответе
+    // и выглядело так, будто агент не прочитал вопрос (UX-аудит 28.11).
+    answer: {
+      text: dropDuplicateGreeting(
+        input.text,
+        stripSourceMarkers(stripUrls(outgoingText)),
+      ),
+      sources,
+    },
     escalation: null,
     steps,
   };
