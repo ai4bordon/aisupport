@@ -85,6 +85,23 @@ const ORDINAL_BEFORE =
   /(?:№|п\.|стр\.|вер\.|гл\.|раздел\w*|шаг\w*|этап\w*|пункт\w*|верси\w*|том\w*)\s*$/iu;
 
 /**
+ * Номер пункта маркированного списка.
+ *
+ * Ответ агента часто оформлен списком: «**1. Подписки с автоматическим
+ * продлением**», «2) Второй способ». Такие числа — номера пунктов, а не
+ * суммы, но денежное слово рядом («способы оплаты зависят…») превращало
+ * их в суммы: суммы нет в источниках, и ответ уходил в эскалацию вместо
+ * нормального ответа клиенту.
+ *
+ * Номер пункта отличается двумя признаками сразу: он стоит в начале строки
+ * (с возможными маркерами `**`, `-`, `•`) и после него либо точка, либо
+ * скобка. Оба признака нужны: «1.5» — это число, а «1.» в начале строки —
+ * пункт списка.
+ */
+const LIST_ITEM_NUMBER =
+  /(?:^|\n)\s*(?:[*_•\-–—]+\s*)?(\d{1,2})\s*(?:[.)]|[-–—])\s*/u;
+
+/**
  * Денежные слова: около них число читается как сумма.
  *
  * Список узкий: «стоимость», «цена», «сумма», «итого», «оплата»,
@@ -207,6 +224,18 @@ function moneyWordBefore(text: string, start: number): number | null {
 function extractAnswerAmounts(text: string): Set<number> {
   const cleaned = stripServiceParts(text);
   const amounts = new Set<number>();
+  // Номера пунктов списка отмечаются по позиции: обычная проверка
+  // «окружающий текст» не отличает «1.» в начале строки от «1.5», а по
+  // значению совпадение поймало бы другое число с тем же номером.
+  const listItemPositions = new Set<number>();
+  for (const match of cleaned.matchAll(new RegExp(LIST_ITEM_NUMBER, "gu"))) {
+    const digits = match[1];
+    if (digits === undefined) continue;
+    // Позиция самого числа внутри совпадения.
+    const offset = match[0].indexOf(digits);
+    if (offset < 0) continue;
+    listItemPositions.add((match.index ?? 0) + offset);
+  }
   for (const match of cleaned.matchAll(new RegExp(NUMBER, "gu"))) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
@@ -214,6 +243,9 @@ function extractAnswerAmounts(text: string): Set<number> {
     const after = cleaned.slice(end, end + 40);
 
     if (isNotAmount(before, after)) continue;
+
+    // Номер пункта списка — не сумма: сверять его с источниками нечего.
+    if (listItemPositions.has(start)) continue;
 
     const integerPart = match[0].split(/[.,]/u)[0] ?? "";
     const digits = integerPart.replace(/[^\d]/gu, "");
