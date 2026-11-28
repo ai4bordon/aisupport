@@ -71,7 +71,20 @@ describe("маскирование персональных данных", () =>
   it("restoreMaskedData возвращает исходный текст", () => {
     const { maskedText, mapping } = maskPersonalData(ORIGINAL);
 
-    expect(restoreMaskedData(maskedText, mapping)).toBe(ORIGINAL);
+    // Расчётный счёт клиенту не показывается: метка остаётся меткой.
+    const restored = restoreMaskedData(maskedText, mapping);
+    expect(restored).toContain("Иванов Иван Иванович");
+    expect(restored).toContain("ivanov@example.com");
+    expect(restored).not.toContain("40702810100000012345");
+  });
+
+  it("восстановление возвращает и скрытые классы по явному запросу", () => {
+    // Служебный сценарий, где значение нужно вернуть целиком: например,
+    // запись в журнал для служебных нужд. По умолчанию карта скрыта.
+    const { maskedText, mapping } = maskPersonalData("карта 4276 1234 5678 9012");
+
+    const restored = restoreMaskedData(maskedText, mapping, new Set());
+    expect(restored).toContain("4276 1234 5678 9012");
   });
 
   it("восстановление не трогает метки без соответствия", () => {
@@ -115,6 +128,29 @@ describe("маскирование персональных данных", () =>
     expect(result.maskedText).toContain("34 717");
     expect(result.maskedText).toContain("50");
     expect(result.maskedText).not.toContain("⟦");
+  });
+
+  it("номер карты не восстанавливается в ответе клиенту", () => {
+    // Регрессия (аудит 28.11): клиент прислал карту, модель её
+    // процитировала, и номер возвращался в ответе — карта размножалась по
+    // переписке. Номер клиенту не нужен, поэтому метка остаётся меткой.
+    const { maskedText, mapping } = maskPersonalData("карта 4276 1234 5678 9012");
+
+    expect(maskedText).toContain("⟦BANK_1⟧");
+
+    const restored = restoreMaskedData("Проверьте карту ⟦BANK_1⟧", mapping);
+    expect(restored).toBe("Проверьте карту ⟦BANK_1⟧");
+    expect(restored).not.toContain("4276");
+    expect(restored).not.toContain("9012");
+  });
+
+  it("остальные персональные данные восстанавливаются как раньше", () => {
+    // Клиент законно получает свои же данные обратно: правило скрытия
+    // касается только карты, СНИЛС и паспорта.
+    const { mapping } = maskPersonalData("почта ivanov@example.com");
+    const restored = restoreMaskedData("Письмо на ⟦EMAIL_1⟧", mapping);
+
+    expect(restored).toBe("Письмо на ivanov@example.com");
   });
 
   it("текст без ПД не меняется", () => {

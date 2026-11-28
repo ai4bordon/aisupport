@@ -461,8 +461,42 @@ export function maskPersonalData(text: string, scope: MaskScope = {}): MaskResul
   return { maskedText, mapping, maskedFieldsCount };
 }
 
-export function restoreMaskedData(text: string, mapping: MaskMapping): string {
-  return text.replace(/⟦[A-Z]+_\d+⟧/g, (label) => mapping[label] ?? label);
+/**
+ * Классы персональных данных, которые клиенту не показываются.
+ *
+ * Банковская карта, СНИЛС и паспорт — это данные, которыми клиент
+ * расплачивается и подтверждает личность. В ответе агента они не нужны:
+ * клиент и так знает свой номер, а возвращать его в переписке значит
+ * размножить секрет по журналу диалога.
+ *
+ * Поэтому такие метки в ответе остаются метками: модель получила их в
+ * маскированном виде и ответить конкретным номером не может.
+ */
+const CLASSES_HIDDEN_FROM_CLIENT: ReadonlySet<MaskClass> = new Set<MaskClass>([
+  "BANK",
+  "SNILS",
+  "PASSPORT",
+]);
+
+/**
+ * Восстановление масок в тексте.
+ *
+ * @param text текст с метками.
+ * @param mapping таблица соответствий: метка → исходное значение.
+ * @param skipClasses классы, которые клиенту не показываются.
+ */
+export function restoreMaskedData(
+  text: string,
+  mapping: MaskMapping,
+  skipClasses: ReadonlySet<MaskClass> = CLASSES_HIDDEN_FROM_CLIENT,
+): string {
+  return text.replace(/⟦([A-Z]+)_(\d+)⟧/gu, (label, kind: string) => {
+    if (skipClasses.has(kind as MaskClass)) {
+      // Метка остаётся меткой: значение клиенту не показывается.
+      return label;
+    }
+    return mapping[label] ?? label;
+  });
 }
 
 /**
