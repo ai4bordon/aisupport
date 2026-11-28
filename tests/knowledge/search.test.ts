@@ -224,12 +224,48 @@ describe("поиск по базе знаний", () => {
       );
     }
 
+    // Пять материалов, совпадающих с вопросом по словам: они стоят выше
+    // инструкции в текстовой ветке. Пул кандидатов обязан быть шире
+    // итогового лимита, иначе инструкция отбрасывается до слияния.
+    for (let index = 0; index < 5; index += 1) {
+      const article = await testPool().query<{ id: string }>(
+        `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
+         VALUES ($1, $2, $3, 'published', now(), now()) RETURNING id`,
+        // Заголовок без слов вопроса: материал совпадает лексически, но
+        // не отвечает на вопрос — именно такие и забивали выдачу.
+        [tenant, `Материал ${index}`, `Оплата счёта ${index} заказа в личном кабинете.`],
+      );
+      await testPool().query(
+        `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
+         VALUES ($1, $2, 0, $3, to_tsvector('russian', $3), $4::vector, 'deterministic-hash-v1')`,
+        [
+          tenant,
+          article.rows[0]?.id ?? "",
+          `Оплата счёта ${index} заказа в личном кабинете.`,
+          `[${embeddingFor(["справочник", "разработчиков", "номер"]).join(",")}]`,
+        ],
+      );
+    }
+
     // Инструкция: текстовое совпадение с вопросом, вектор с ней не схож.
     const payment = await testPool().query<{ id: string }>(
       `INSERT INTO kb_articles (tenant_id, title, body_md, status, valid_from, approved_at)
        VALUES ($1, 'Способы оплаты заказа', 'В панели управления клиента доступны способы оплаты счетов.', 'published', now(), now())
        RETURNING id`,
       [tenant],
+    );
+    await testPool().query(
+      `INSERT INTO kb_sources (tenant_id, source_url, title, section_path, content_text, status, origin, provenance, raw_html_path, crawled_at)
+       VALUES ($1, $2, $3, $4, $5, 'approved_by_customer', 'docs_site', 'тест', $6, now())
+       ON CONFLICT (tenant_id, source_url) DO UPDATE SET section_path = EXCLUDED.section_path`,
+      [
+        tenant,
+        "https://docs.softline.com/ru-ru/subscriptions/payment-methods",
+        "Способы оплаты заказа",
+        "Оплата подписки / Способы оплаты заказа",
+        "В панели управления клиента доступны способы оплаты счетов.",
+        "/tmp/test-source.html",
+      ],
     );
     await testPool().query(
       `INSERT INTO kb_chunks (tenant_id, article_id, chunk_no, text, search_vector, embedding, embedding_model)
@@ -250,7 +286,7 @@ describe("поиск по базе знаний", () => {
       embed: async () => embeddingFor(["справочник", "разработчиков", "номер"]),
     });
 
-    const results = await search("Как оплатить счета?", tenant);
+    const results = await search("Как оплатить подписку?", tenant);
 
     // Вектор заполнил лимит — пять шумных материалов.
     expect(results.length).toBe(5);

@@ -365,6 +365,14 @@ export async function search(
   limit: number = DEFAULT_LIMIT,
 ): Promise<SearchResult[]> {
   const boundedLimit = Math.max(1, Math.min(limit, MAX_LIMIT));
+  // Пул кандидатов шире итогового лимита: обе ветки сначала собирают
+  // материалы, и только потом идёт слияние и отбор.
+  //
+  // Без этого материал отбрасывался до слияния: на стенде вопрос «Как
+  // оплатить подписку?» давал в текстовой ветке «Способы оплаты заказа»
+  // девятым, а пул был ограничен пятью — и инструкция до слияния не
+  // доходила вовсе.
+  const candidateLimit = Math.max(boundedLimit * 4, 20);
   const pool = getPool();
 
   const embedding = await embeddingProvider.embed(query);
@@ -401,7 +409,7 @@ export async function search(
     [
       tenantId,
       toVectorLiteral(embedding),
-      boundedLimit,
+      candidateLimit,
       MIN_VECTOR_SIMILARITY,
       model,
       queryTerms(query),
@@ -455,7 +463,7 @@ export async function search(
       ORDER BY score DESC
       LIMIT $3
       `,
-      [tenantId, textQuery, boundedLimit, queryTerms(query)],
+      [tenantId, textQuery, candidateLimit, queryTerms(query)],
     );
 
     for (const row of textResult.rows) {
