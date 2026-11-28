@@ -25,6 +25,18 @@ function errorResponse(status: number, code: string, message: string): Response 
 }
 
 export async function GET(request: Request): Promise<Response> {
+  // Браузерный запрос ведём на человекочитаемую страницу журнала: JSON
+  // в адресной строке выглядел как сбой, и без сессии клиент получал
+  // голый ответ с ошибкой. Контрактный JSON для программных клиентов
+  // остаётся: путь зафиксирован в docs/api-contract.md §3.
+  const accept = request.headers.get("accept") ?? "";
+  if (accept.includes("text/html")) {
+    return new Response(null, {
+      status: 307,
+      headers: { location: "/manager/audit" },
+    });
+  }
+
   if (readAccessSession(request.headers.get("cookie") ?? undefined) === null) {
     return errorResponse(401, "unauthorized", "Кабинет закрыт: нужен код доступа");
   }

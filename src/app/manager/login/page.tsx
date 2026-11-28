@@ -50,8 +50,8 @@ export default function ManagerLoginPage() {
       });
 
       if (!response.ok) {
-        // Код не принят — поле очищается, чтобы секрет не оставался в DOM.
-        setCode("");
+        // Код не очищается: иначе при опечатке пришлось бы вводить его
+        // заново, а поле секрета и так не покидает страницу.
         setError(await readError(response));
         return;
       }

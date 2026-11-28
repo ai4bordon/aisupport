@@ -8,6 +8,7 @@ import {
   ManagerLoading,
 } from "@/app/manager/components";
 import { safeSourceHref } from "@/core/safe-link";
+import { Markdown } from "@/app/components/markdown";
 
 /**
  * Клиентская часть раздела кабинета менеджера «Песочница и история».
@@ -271,7 +272,9 @@ export function SandboxClient() {
           {result ? (
             <div className="sandbox-result" aria-label="Ответ песочницы">
               <h3 className="sandbox-result__title">Ответ агента</h3>
-              <p className="sandbox-result__answer">{result.answer}</p>
+              <div className="sandbox-result__answer">
+                <Markdown source={result.answer} />
+              </div>
               <ul className="sandbox-meta" aria-label="Метрики ответа">
                 <li>{`Оценка: ${GRADE_LABELS[result.grade] ?? result.grade}`}</li>
                 <li>{`Исход: ${OUTCOME_LABELS[result.outcome] ?? result.outcome}`}</li>
@@ -344,7 +347,9 @@ export function SandboxClient() {
                   <p className="sandbox-history__question">
                     {session.request_text_masked}
                   </p>
-                  <p className="sandbox-history__answer">{session.result.answer}</p>
+                  <div className="sandbox-history__answer">
+                    <Markdown source={session.result.answer} />
+                  </div>
                   <ul className="sandbox-meta">
                     <li>{`Версия конфигурации: ${session.settings_version}`}</li>
                     <li>{`Модель: ${session.settings_snapshot?.model ?? "не указана"}`}</li>
