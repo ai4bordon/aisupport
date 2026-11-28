@@ -78,6 +78,45 @@ describe("маскирование персональных данных", () =>
     expect(restoreMaskedData("Значение ⟦PERSON_9⟧", {})).toBe("Значение ⟦PERSON_9⟧");
   });
 
+  it("маскирует карту с пробелами и дефисами", () => {
+    // Регрессия (аудит 28.11): правило ловило только слитные 16 и 20
+    // цифр, поэтому карта «4276 1234 5678 9012» уходила в базу и в
+    // модель немаскированной, и агент повторял её клиенту.
+    const withSpaces = maskPersonalData("карта 4276 1234 5678 9012");
+    expect(withSpaces.maskedText).toContain("⟦BANK_1⟧");
+    expect(withSpaces.maskedText).not.toContain("4276");
+    expect(withSpaces.maskedText).not.toContain("9012");
+
+    const withDashes = maskPersonalData("карта 4276-1234-5678-9012");
+    expect(withDashes.maskedText).toContain("⟦BANK_1⟧");
+    expect(withDashes.maskedText).not.toContain("4276");
+  });
+
+  it("маскирует расчётный счёт с пробелами", () => {
+    const result = maskPersonalData("счёт 40817 810 0 9991 0004312");
+
+    expect(result.maskedText).toContain("⟦BANK_1⟧");
+    expect(result.maskedText).not.toContain("40817");
+    expect(result.maskedText).not.toContain("0004312");
+  });
+
+  it("маскирует СНИЛС", () => {
+    const result = maskPersonalData("снилс 123-456-789 00");
+
+    expect(result.maskedText).toContain("⟦SNILS_1⟧");
+    expect(result.maskedText).not.toContain("123-456-789");
+  });
+
+  it("обычные числа маскированием не затрагиваются", () => {
+    // Цена и количество — не персональные данные: маскировать их нельзя,
+    // иначе в ответе пропадёт сумма.
+    const result = maskPersonalData("цена 34 717 рублей, количество 50 мест");
+
+    expect(result.maskedText).toContain("34 717");
+    expect(result.maskedText).toContain("50");
+    expect(result.maskedText).not.toContain("⟦");
+  });
+
   it("текст без ПД не меняется", () => {
     const text = "Как получить электронную лицензию?";
     const { maskedText, maskedFieldsCount } = maskPersonalData(text);

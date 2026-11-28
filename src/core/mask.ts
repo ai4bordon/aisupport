@@ -15,6 +15,7 @@ export type MaskClass =
   | "EMAIL"
   | "INN"
   | "BANK"
+  | "SNILS"
   | "PASSPORT";
 
 /**
@@ -266,12 +267,23 @@ const RULES: Rule[] = [
     pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/dgi,
   },
   {
+    // Банковская карта: 20 цифр. Разделители допускаются, потому что карту
+    // пишут и так: «4276 1234 5678 9012». Без разделителей ловились только
+    // слитные номера, и карта с пробелами уходила в базу и в модель
+    // немаскированной.
     kind: "BANK",
-    pattern: /(?<![\p{L}\p{N}])\d{20}(?![\p{L}\p{N}])/dug,
+    pattern: /(?<![\p{L}\p{N}])(?:\d[ -]?){19}\d(?![\p{L}\p{N}])/dug,
   },
   {
     kind: "BANK",
-    pattern: /(?<![\p{L}\p{N}])\d{16}(?![\p{L}\p{N}])/dug,
+    pattern: /(?<![\p{L}\p{N}])(?:\d[ -]?){15}\d(?![\p{L}\p{N}])/dug,
+  },
+  {
+    // СНИЛС: 11 цифр, обычно записанных группами «123-456-789 00».
+    // Отдельный класс нужен, потому что номер похож на телефон или на
+    // счёт, но маскируется по-своему.
+    kind: "SNILS",
+    pattern: /(?<![\p{L}\p{N}])\d{3}-\d{3}-\d{3}[ -]?\d{2}(?![\p{L}\p{N}])/dug,
   },
   {
     kind: "PASSPORT",
@@ -352,7 +364,13 @@ const RULES: Rule[] = [
 /** Ключ дедупликации: класс плюс нормализованное значение. */
 function dedupKey(kind: MaskClass, value: string): string {
   if (kind === "EMAIL") return `${kind}:${value.toLowerCase()}`;
-  if (kind === "PHONE" || kind === "INN" || kind === "BANK" || kind === "PASSPORT") {
+  if (
+    kind === "PHONE" ||
+    kind === "INN" ||
+    kind === "BANK" ||
+    kind === "SNILS" ||
+    kind === "PASSPORT"
+  ) {
     return `${kind}:${value.replace(/\D/g, "")}`;
   }
   return `${kind}:${value.toLowerCase().replace(/\s+/g, " ").trim()}`;
@@ -368,6 +386,7 @@ function countersFrom(mapping: MaskMapping): Record<MaskClass, number> {
     EMAIL: 0,
     INN: 0,
     BANK: 0,
+    SNILS: 0,
     PASSPORT: 0,
   };
   for (const label of Object.keys(mapping)) {
