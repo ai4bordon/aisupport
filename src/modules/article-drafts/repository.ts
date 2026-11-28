@@ -127,11 +127,30 @@ export async function transitionArticle(
 }
 
 /**
+ * Чтение статьи под блокировкой строки.
+ *
+ * Блокировка нужна там, где решение принимается по текущему состоянию
+ * материала: между чтением и записью не должно пройти другое решение.
+ */
+export async function selectArticleForUpdate(
+  client: PoolClient,
+  tenantId: string,
+  id: string,
+): Promise<ArticleRow | null> {
+  const result = await client.query<ArticleRow>(
+    "SELECT * FROM kb_articles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+    [tenantId, id],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
  * Правка текста статьи.
  *
  * Версия растёт на единицу: правка видна по номеру, и по нему же видно,
- * что текст менялся. Условие по статусу стоит в самом `UPDATE`: правка
- * материала, по которому решение уже принято, не проходит.
+ * что текст менялся. Условие по статусу и по версии стоит в самом
+ * `UPDATE`: правка материала, по которому решение уже принято, не проходит,
+ * и правка устаревшей версии не затирает чужое изменение.
  */
 export async function updateArticle(
   client: PoolClient,
@@ -141,6 +160,8 @@ export async function updateArticle(
     bodyMd: string;
     title?: string;
     allowedStatuses: string[];
+    /** Версия, которую менеджер видел при открытии материала. */
+    expectedVersion: number;
   },
 ): Promise<ArticleRow | null> {
   const result = await client.query<ArticleRow>(
@@ -151,6 +172,7 @@ export async function updateArticle(
       WHERE tenant_id = $1
         AND id = $2
         AND status = ANY($3::text[])
+        AND version = $6
       RETURNING *`,
     [
       values.tenantId,
@@ -158,6 +180,7 @@ export async function updateArticle(
       values.allowedStatuses,
       values.bodyMd,
       values.title ?? null,
+      values.expectedVersion,
     ],
   );
   return result.rows[0] ?? null;
@@ -165,6 +188,10 @@ export async function updateArticle(
 
 /**
  * Удаление статьи с её чанками.
+ *
+ * Строка материала берётся под блокировку `FOR UPDATE`: между проверкой
+ * статуса и удалением нельзя успеть провести одобрение или публикацию —
+ * иначе удалился бы уже опубликованный материал.
  *
  * Чанки удаляются первыми: на них ссылается внешний ключ, и удаление статьи
  * с чанками одним каскадом невозможно — удаление статьи сначала оставило бы
@@ -175,12 +202,19 @@ export async function deleteArticle(
   tenantId: string,
   id: string,
 ): Promise<boolean> {
+  const locked = await client.query<{ status: string }>(
+    "SELECT status FROM kb_articles WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+    [tenantId, id],
+  );
+  if (locked.rowCount === 0) {
+    return false;
+  }
   await client.query(
     "DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id = $2",
     [tenantId, id],
   );
   const result = await client.query(
-    "DELETE FROM kb_articles WHERE tenant_id = $1 AND id = $2",
+    "DELETE FROM kb_articles WHERE tenant_id = $1 AND id = $2 AND status <> 'published'",
     [tenantId, id],
   );
   return (result.rowCount ?? 0) > 0;

@@ -163,24 +163,44 @@ function DraftModal({
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(draft.body_md);
   const [confirming, setConfirming] = useState(false);
+  // Подтверждение закрытия при несохранённой правке: текст не должен
+  // теряться молча.
+  const [discardPrompt, setDiscardPrompt] = useState(false);
 
-  // Escape закрывает окно, но не в момент правки: закрытие посреди
-  // несохранённой правки потеряло бы текст молча.
+  /**
+   * Закрытие окна.
+   *
+   * Пока идёт сохранение, закрывать нельзя: поздний ответ сервера тогда
+   * открыл бы уже закрытое окно заново. При несохранённой правке закрытие
+   * спрашивает подтверждение — тот же порядок, что у Escape, у фона и у
+   * кнопки.
+   */
+  function requestClose(): void {
+    if (saving) return;
+    if (editing) {
+      setDiscardPrompt(true);
+      return;
+    }
+    onClose();
+  }
+
+  // Escape закрывает окно в том же порядке, что фон и кнопка: при
+  // несохранённой правке — ничего, во время сохранения — ничего.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key !== "Escape" || editing) return;
+      if (event.key !== "Escape" || editing || saving) return;
       onClose();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [editing, onClose]);
+  }, [editing, saving, onClose]);
 
   return (
     <div
       className="kn-modal-backdrop"
       onClick={(event) => {
         // Клик по фону закрывает окно, клик по самому окну — нет.
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
@@ -205,7 +225,8 @@ function DraftModal({
             type="button"
             className="sl-m-button"
             aria-label="Закрыть"
-            onClick={onClose}
+            disabled={saving}
+            onClick={requestClose}
           >
             Закрыть
           </button>
@@ -251,6 +272,7 @@ function DraftModal({
                 onClick={() => {
                   setText(draft.body_md);
                   setEditing(false);
+                  setDiscardPrompt(false);
                 }}
               >
                 Отмена
@@ -293,6 +315,33 @@ function DraftModal({
             </>
           )}
         </footer>
+
+        {discardPrompt ? (
+          <div className="kn-discard" role="alertdialog" aria-label="Несохранённые изменения">
+            <p className="kn-discard-text">
+              Правка не сохранена. Закрыть окно и потерять изменения?
+            </p>
+            <div className="kn-discard-actions">
+              <button
+                type="button"
+                className="sl-m-button kn-button--danger"
+                onClick={() => {
+                  setDiscardPrompt(false);
+                  onClose();
+                }}
+              >
+                Закрыть без сохранения
+              </button>
+              <button
+                type="button"
+                className="sl-m-button"
+                onClick={() => setDiscardPrompt(false)}
+              >
+                Продолжить правку
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -392,7 +441,9 @@ export function KnowledgeClient() {
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ body_md: bodyMd }),
+          // Версия материала едет вместе с правкой: без неё сервер не может
+          // отличить правку по свежему материалу от правки по устаревшему.
+          body: JSON.stringify({ body_md: bodyMd, version: openDraft.version }),
         },
       );
       const body = await readJson(response);

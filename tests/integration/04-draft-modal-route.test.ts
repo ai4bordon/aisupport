@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closePool } from "@/db/pool";
-import { createArticleDraft } from "@/modules/article-drafts";
+import { createArticleDraft, approveArticleDraft, publishArticleDraft } from "@/modules/article-drafts";
 import { signAccessSession, verifyAccessCode } from "@/modules/access/session";
 import {
   GET,
@@ -167,7 +167,7 @@ describe("маршрут черновика кабинета менеджера"
       new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
         method: "PUT",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ body_md: edited }),
+        body: JSON.stringify({ body_md: edited, version: 1 }),
       }),
       { params: Promise.resolve({ id }) },
     );
@@ -195,7 +195,7 @@ describe("маршрут черновика кабинета менеджера"
       new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
         method: "PUT",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ body_md: "   " }),
+        body: JSON.stringify({ body_md: "   ", version: 1 }),
       }),
       { params: Promise.resolve({ id }) },
     );
@@ -237,6 +237,105 @@ describe("маршрут черновика кабинета менеджера"
     );
 
     expect(response.status).toBe(404);
+
+    const rows = await testPool().query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM kb_articles WHERE id = $1",
+      [id],
+    );
+    expect(Number(rows.rows[0]?.count ?? "0")).toBe(1);
+  });
+
+  it("PUT по устаревшей версии отвечает 409 и не затирает чужую правку", async () => {
+    // Поздний менеджер: он открыл материал в версии 1, пока другой
+    // менеджер сохранил правку и поднял версию до 2.
+    const id = await seedDraft();
+    const cookie = await accessCookie();
+
+    const first = await PUT(
+      new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ body_md: "Правка первого менеджера.", version: 1 }),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+    expect(first.status).toBe(200);
+
+    const stale = await PUT(
+      new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ body_md: "Правка второго менеджера.", version: 1 }),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+    expect(stale.status).toBe(409);
+
+    // Чужая правка на месте: её не затёрли.
+    const rows = await testPool().query<{ body_md: string; version: number }>(
+      "SELECT body_md, version FROM kb_articles WHERE id = $1",
+      [id],
+    );
+    expect(rows.rows[0]?.body_md).toBe("Правка первого менеджера.");
+    expect(rows.rows[0]?.version).toBe(2);
+  });
+
+  it("PUT без версии отвечает 400", async () => {
+    const id = await seedDraft();
+    const cookie = await accessCookie();
+
+    const response = await PUT(
+      new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ body_md: "Правка без версии." }),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it("одобренный материал править нельзя: обход ревью закрыт", async () => {
+    // Правка одобренного материала опубликовала бы другой текст без
+    // нового решения менеджера.
+    const id = await seedDraft();
+    const cookie = await accessCookie();
+    await approveArticleDraft({ tenantId, id, actor: "manager-1" });
+
+    const response = await PUT(
+      new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ body_md: "Правка после одобрения.", version: 1 }),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(409);
+
+    const rows = await testPool().query<{ body_md: string }>(
+      "SELECT body_md FROM kb_articles WHERE id = $1",
+      [id],
+    );
+    expect(rows.rows[0]?.body_md).toBe(ARTICLE_BODY);
+  });
+
+  it("DELETE опубликованного материала отвечает 409 и не удаляет его", async () => {
+    const id = await seedDraft();
+    const cookie = await accessCookie();
+    await approveArticleDraft({ tenantId, id, actor: "manager-1" });
+    await publishArticleDraft({ tenantId, id });
+
+    const response = await DELETE(
+      new Request(`http://localhost/api/manager/knowledge/draft/${id}`, {
+        method: "DELETE",
+        headers: { cookie },
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(409);
 
     const rows = await testPool().query<{ count: string }>(
       "SELECT count(*)::text AS count FROM kb_articles WHERE id = $1",

@@ -224,9 +224,41 @@ describe("модалка черновика статьи", () => {
       (call) => (call[1] as RequestInit | undefined)?.method === "PUT",
     );
     expect(String(put?.[0])).toContain(`/api/manager/knowledge/draft/${DRAFT_ID}`);
+    // Версия материала едет вместе с правкой.
     expect((put?.[1] as RequestInit).body).toBe(
-      JSON.stringify({ body_md: "Новый текст статьи." }),
+      JSON.stringify({ body_md: "Новый текст статьи.", version: 1 }),
     );
+  });
+
+  it("не закрывает окно с несохранённой правкой без подтверждения", async () => {
+    mockFetch();
+    await openModal();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Изменить/i }));
+    await screen.findByRole("textbox", { name: /текст статьи/i });
+
+    // Кнопка «Закрыть» спрашивает подтверждение, а не теряет правку молча.
+    fireEvent.click(screen.getByRole("button", { name: /Закрыть/i }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Отказ возвращает к правке.
+    fireEvent.click(screen.getByRole("button", { name: /Продолжить правку/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("Escape при несохранённой правке не закрывает окно", async () => {
+    mockFetch();
+    await openModal();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Изменить/i }));
+    await screen.findByRole("textbox", { name: /текст статьи/i });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("копирует текст статьи в буфер обмена", async () => {

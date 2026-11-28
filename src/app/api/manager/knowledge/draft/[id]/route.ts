@@ -30,6 +30,13 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const updateSchema = z.object({
   body_md: z.string().min(1).max(200_000),
   title: z.string().min(1).max(300).optional(),
+  /**
+   * Версия материала, которую менеджер видел при открытии.
+   *
+   * Обязательна: без неё правка молча затирала бы изменение, сделанное
+   * другим менеджером, пока материал был открыт.
+   */
+  version: z.number().int().positive(),
 });
 
 /** Статья в теле ответа — snake_case по контракту внешнего HTTP API. */
@@ -217,7 +224,7 @@ export async function PUT(
     return errorResponse(
       400,
       "validation_error",
-      "Ожидается непустой текст статьи в поле body_md",
+      "Ожидаются непустой текст статьи в поле body_md и версия материка в поле version",
       requestId,
     );
   }
@@ -228,6 +235,7 @@ export async function PUT(
       id,
       bodyMd: parsed.data.body_md,
       title: parsed.data.title,
+      expectedVersion: parsed.data.version,
     });
     return NextResponse.json(
       { draft: toDraftBody(draft) },

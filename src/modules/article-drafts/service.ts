@@ -40,6 +40,7 @@ import {
   insertArticleChunk,
   insertArticleDraft,
   selectArticle,
+  selectArticleForUpdate,
   selectConversation,
   selectConversationMessages,
   transitionArticle,
@@ -328,11 +329,12 @@ export async function getArticleDraft(
 /**
  * Статусы, в которых текст материала ещё можно править.
  *
- * Правка материала, по которому решение уже принято, не проходит: решение
- * менеджера относится к тому тексту, который он видел, и правка после
- * решения сделала бы решение бессмысленным.
+ * Правится только материал, ожидающий решения (`pending_review`). Материал
+ * с принятым решением править нельзя: одобрение относится к тому тексту,
+ * который менеджер видел, а правка после одобрения опубликовала бы другой
+ * текст без нового решения — обход ревью.
  */
-const EDITABLE_STATUSES: ArticleDraftStatus[] = ["pending_review", "approved"];
+const EDITABLE_STATUSES: ArticleDraftStatus[] = ["pending_review"];
 
 /**
  * Правка текста черновика.
@@ -366,8 +368,17 @@ export async function updateArticleDraft(
       bodyMd,
       title: title !== undefined && title.length > 0 ? title : undefined,
       allowedStatuses: EDITABLE_STATUSES,
+      expectedVersion: input.expectedVersion,
     });
     if (!row) {
+      // Материал изменился после того, как менеджер его открыл: правка
+      // молча затерла бы чужое решение или чужой текст.
+      if (current.version !== input.expectedVersion) {
+        throw new ArticleDraftError(
+          "conflict",
+          "Материал изменён после того, как вы его открыли: обновите окно и повторите правку",
+        );
+      }
       throw new ArticleDraftError(
         "conflict",
         `Править можно только материал, по которому решение не принято, текущий статус — ${current.status}`,
@@ -390,6 +401,10 @@ export async function updateArticleDraft(
  * Удаляются и чанки материала: они ссылаются на статью, и статьи без
  * текста в базе не остаётся. Опубликованный материал удалить нельзя —
  * он уже в поиске, и решение об этом принимается не здесь.
+ *
+ * Статус проверяется под блокировкой строки: между проверкой и удалением
+ * нельзя успеть провести публикацию, иначе удалился бы материал, уже
+ * доступный поиску.
  */
 export async function deleteArticleDraft(
   tenantId: string,
@@ -400,7 +415,7 @@ export async function deleteArticleDraft(
   try {
     await client.query("BEGIN");
 
-    const current = await selectArticle(client, tenantId, id);
+    const current = await selectArticleForUpdate(client, tenantId, id);
     if (!current) {
       throw new ArticleDraftError("not_found", "Черновик не найден");
     }
