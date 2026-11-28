@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { chunkSource } from "@/import/knowledge";
+import { chunkSource, selectIndexableChunks } from "@/import/knowledge";
 
 const LONG_SENTENCE = "Тестовое предложение для проверки нарезки на чанки заданного размера.";
 
@@ -165,5 +165,67 @@ describe("chunkSource", () => {
     for (const chunk of chunks) {
       expect(chunk.text.trim().length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("selectIndexableChunks", () => {
+  /**
+   * Текст статьи «Оплата подписки» со стенда: 161 знак.
+   *
+   * Статья опубликована, но была отброшена при импорте: чанк короче
+   * минимального размера, и материал целиком не попал в индекс. Вопрос
+   * «Как оплатить подписку?» не находил источника и уходил в эскалацию.
+   */
+  const PAYMENT_BODY =
+    "Оплата подписки производится автоматически по данным платёжного метода. " +
+    "Подписка с автоматическим продлением (AR) требует согласия покупателя. " +
+    "Отмена продления доступна в личном кабинете Softline Checkout.";
+
+  it("короткий материал со смыслом попадает в индекс хотя бы одним чанком", () => {
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/payments/subscription-payment",
+      title: "Оплата подписки",
+      sectionPath: "Платежные методы",
+      text: PAYMENT_BODY,
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    // Текст короче минимального чанка: нарезка даёт один чанк.
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.text.length).toBeLessThan(800);
+
+    // Но материал содержательный, значит он индексируется.
+    const usable = selectIndexableChunks(chunks);
+    expect(usable).toHaveLength(1);
+    expect(usable[0]?.text).toContain("Оплата подписки производится автоматически");
+  });
+
+  it("длинный материал индексируется целиком", () => {
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/id/login",
+      title: "Как войти в аккаунт",
+      sectionPath: "Softline ID / Авторизация",
+      text: makeText(40),
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    expect(selectIndexableChunks(chunks)).toHaveLength(chunks.length);
+  });
+
+  it("материал без содержательного текста в индекс не попадает", () => {
+    // Страница-оглавление: цитировать нечего.
+    const chunks = chunkSource({
+      url: "https://docs.softline.com/ru-ru/payments",
+      title: "Платежные методы",
+      sectionPath: "",
+      text: "Оплата",
+      crawledAt: "2026-11-26T10:00:00.000Z",
+    });
+
+    expect(selectIndexableChunks(chunks)).toEqual([]);
+  });
+
+  it("пустой список чанков не даёт ошибку", () => {
+    expect(selectIndexableChunks([])).toEqual([]);
   });
 });

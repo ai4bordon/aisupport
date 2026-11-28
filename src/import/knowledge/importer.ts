@@ -19,7 +19,13 @@
 import { createHash } from "node:crypto";
 import pg from "pg";
 
-import { chunkSource, sourceId, type Chunk, type SourceContent } from "./chunk";
+import {
+  chunkSource,
+  selectIndexableChunks,
+  sourceId,
+  type Chunk,
+  type SourceContent,
+} from "./chunk";
 import { crawlSite, type CrawlOptions, type CrawledPage } from "./crawl";
 import {
   createDeterministicEmbeddingProvider,
@@ -51,8 +57,6 @@ export type ImportOptions = {
 export type ImportDocsSiteOptions = CrawlOptions & ImportOptions;
 
 const DEFAULT_TENANT_SLUG = "demo-tenant";
-/** Минимальный размер чанка: контракт §8.2 — 800–1200 знаков. */
-const MIN_CHUNK_LENGTH = 800;
 const DOCS_ORIGIN = "docs_site";
 const STORE_ORIGIN = "store_page";
 
@@ -211,10 +215,12 @@ async function importPage(
   };
   const chunkList = chunkSource(content);
 
-  // Страница-оглавление раздела не несёт текста статьи: чанк из неё был бы
-  // короче минимального размера. Такой источник сохраняется, но в поиск не
-  // попадает — как и материал, который нечего цитировать.
-  const usable = chunkList.filter((chunk) => chunk.text.length >= MIN_CHUNK_LENGTH);
+  // Страница-оглавление раздела не несёт текста статьи: цитировать нечего,
+  // и такой источник в поиск не попадает. Материал с содержательным текстом
+  // индексируется хотя бы одним чанком, даже если он короче минимального
+  // размера: иначе короткая статья оставалась опубликованной и невидимой
+  // для поиска.
+  const usable = selectIndexableChunks(chunkList);
 
   // Старые чанки статьи заменяются целиком: содержание источника обновилось.
   await client.query("DELETE FROM kb_chunks WHERE tenant_id = $1 AND article_id = $2", [

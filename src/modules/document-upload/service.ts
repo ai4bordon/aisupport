@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { getPool } from "@/db/pool";
-import type { Chunk } from "@/import/knowledge";
+import { selectIndexableChunks, type Chunk } from "@/import/knowledge";
 import { currentEmbeddingProvider } from "@/modules/knowledge";
 
 import { chunkDocument } from "./chunking";
@@ -50,7 +50,6 @@ import type {
 export const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
 
 /** Минимальный размер чанка: короче цитировать нечего. */
-const MIN_CHUNK_LENGTH = 800;
 
 /** Каталог хранения загруженных файлов. */
 export function documentsDirectory(): string {
@@ -305,9 +304,11 @@ async function processDocument(
         text: parsed.text,
         uploadedAt: record.createdAt,
       });
-      // Материал короче минимального чанка цитировать нечем: он не
-      // попадает в индекс, но остаётся видимым менеджеру как разобранный.
-      chunks = chunkList.filter((chunk) => chunk.text.length >= MIN_CHUNK_LENGTH);
+      // Материал с содержательным текстом индексируется хотя бы одним
+      // чанком, даже если он короче минимального размера: иначе короткий
+      // документ оставался разобранным, но невидимым для поиска. Материал
+      // без текста в индекс не попадает: цитировать нечего.
+      chunks = selectIndexableChunks(chunkList);
 
       await client.query("BEGIN");
       await deleteChunks(client, record.tenantId, record.id);

@@ -144,6 +144,33 @@ describe("загрузка документов базы знаний", () => {
     }
   });
 
+  it("короткий документ получает чанок и попадает в индекс", async () => {
+    // Регрессия (UX-аудит 28.11): материал короче минимального чанка
+    // отбрасывался целиком — документ оставался разобранным, но в поиске
+    // невидимым. Короткий материал с текстом должен индексироваться.
+    const short = "Как оплатить подписку: оплата производится автоматически.";
+
+    const record = await uploadDocument({
+      tenantId,
+      filename: "payment.txt",
+      mimeType: "text/plain",
+      bytes: Buffer.from(short, "utf8"),
+      uploadedBy: "manager-1",
+    });
+
+    expect(record.parseStatus).toBe("parsed");
+    expect(record.chunksCount).toBeGreaterThan(0);
+
+    const chunks = await testPool().query<{ text: string; embedding: string }>(
+      `SELECT text, embedding::text AS embedding
+         FROM kb_chunks WHERE tenant_id = $1 AND document_id = $2`,
+      [tenantId, record.id],
+    );
+    expect(chunks.rows.length).toBe(record.chunksCount);
+    expect(chunks.rows[0]?.text).toContain("Как оплатить подписку");
+    expect(chunks.rows[0]?.embedding).not.toBe("");
+  });
+
   it("до одобрения документ не выдаётся поиском", async () => {
     const record = await uploadDocument({
       tenantId,

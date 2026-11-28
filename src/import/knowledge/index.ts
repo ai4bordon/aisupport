@@ -9,7 +9,7 @@ export { crawlSite } from "./crawl";
 export type { CrawlOptions, CrawlReport, CrawledPage } from "./crawl";
 export { extractPage } from "./extract";
 export type { ExtractedPage } from "./extract";
-export { chunkSource, sourceId } from "./chunk";
+export { chunkSource, selectIndexableChunks, sourceId } from "./chunk";
 export type { Chunk, SourceContent } from "./chunk";
 export { importDocsSite, importCrawledPages } from "./importer";
 export type { ImportDocsSiteOptions, ImportOptions, ImportReport } from "./importer";
