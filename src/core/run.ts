@@ -362,7 +362,12 @@ async function checkPolicy(
   tenantId: string,
   pushStep: (step: Omit<AgentStep, "conversationId">) => Promise<void>,
   sourceIds: string[],
-): Promise<{ allowed: boolean; reason: string | null }> {
+): Promise<{
+  allowed: boolean;
+  reason: string | null;
+  ruleKey: string | null;
+  percent: number | null;
+}> {
   const policyStartedAt = nowMs();
   const ruleKey = POLICY_EXEMPT_INTENTS.has(intent)
     ? null
@@ -410,7 +415,76 @@ async function checkPolicy(
     });
   }
 
-  return { allowed: policyAllowed, reason: policyReason };
+  return {
+    allowed: policyAllowed,
+    reason: policyReason,
+    ruleKey,
+    percent,
+  };
+}
+
+/**
+ * Признак отказа по порогу в причине проверки полномочий.
+ *
+ * Причина порогового отказа устроена так: «Запрошенная скидка 10% выше
+ * полномочий агента (до 5%) — передаём менеджеру». Именно этот вид отказа
+ * означает, что порог назван, а не «скидки не подтверждены».
+ */
+const POLICY_THRESHOLD_MARKER = "выше полномочий агента";
+
+/**
+ * Порог скидки, названный проверкой полномочий.
+ *
+ * Число берётся из результата проверки, а не из константы ядра: порог задаёт
+ * правило арендатора, и в черновике менеджеру должен быть именно его порог.
+ * Правило без записи арендатора применяет встроенное значение — оно тоже
+ * приходит в причине отказа, поэтому черновик остаётся верным и без
+ * настройки правила.
+ *
+ * Разбор строгий: причина другого вида (например, «скидки не подтверждены»)
+ * порога не содержит. Тогда порог остаётся неизвестным, и черновик не
+ * называет процент, которого никто не подтверждал.
+ *
+ * Порог из базы приходит строкой: колонка `numeric(12,4)` возвращается как
+ * «5.0000», поэтому дробная часть допустима и она отбрасывается.
+ */
+function policyDiscountLimit(reason: string | null): number | null {
+  if (reason === null) return null;
+  if (!reason.includes(POLICY_THRESHOLD_MARKER)) return null;
+  const match = /\(?до\s+(\d+(?:[.,]\d+)?)\s*%\)?/u.exec(reason);
+  if (match === null) return null;
+  const percent = Number.parseFloat((match[1] ?? "").replace(",", "."));
+  return Number.isFinite(percent) ? percent : null;
+}
+
+/**
+ * Черновик ответа менеджеру при отказе по полномочиям.
+ *
+ * Черновик — предложение, а не обещание: в нём сказано, что агент может
+ * оформить сам, а что согласуется с руководителем. Клиенту он не уходит:
+ * клиент получает прежнее уведомление о передаче вопроса менеджеру, а
+ * черновик видит только менеджер в очереди обращений.
+ *
+ * Проценты берутся из результата проверки полномочий: запрошенный клиентом
+ * и порог агента, названный правилом. Ни один из них не записан константой
+ * — иначе черновик обещал бы клиенту чужой процент.
+ *
+ * Если порог по причине отказа неизвестен, черновик не называет предел
+ * скидки: лучше сказать менеджеру «условие вне моих полномочий», чем назвать
+ * скидку, которую никто не подтверждал.
+ */
+function policyDenialDraft(policy: {
+  ruleKey: string | null;
+  percent: number | null;
+  reason: string | null;
+}): string {
+  const asked =
+    policy.percent === null ? "" : `Вы просите скидку ${policy.percent}%. `;
+  const limit = policyDiscountLimit(policy.reason);
+  if (policy.ruleKey === "discount_request" && limit !== null) {
+    return `${asked}Максимальная скидка по этому продукту — ${limit}%, могу оформить; большее согласую с руководителем.`;
+  }
+  return `${asked}Это условие вне моих полномочий — подтвердить его может менеджер, запрос ему передан.`;
 }
 
 export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> {
@@ -688,10 +762,14 @@ export async function runAgent(input: NormalizedMessage): Promise<AgentOutcome> 
     sources.map((source) => source.id),
   );
   if (!policy.allowed) {
+    // Черновик уходит менеджеру, а не клиенту: клиент получает прежнее
+    // уведомление о передаче вопроса, а черновик видит только менеджер в
+    // очереди обращений. Итог остаётся эскалацией — наличие черновика не
+    // превращает отказ по полномочиям в разрешение ответить клиенту.
     return escalationOutcome(
       "policy_denied",
       policy.reason ?? "Условия вне полномочий агента — передаём менеджеру.",
-      null,
+      policyDenialDraft(policy),
       steps,
     );
   }
